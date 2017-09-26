@@ -1,4 +1,5 @@
-import React, { PropTypes, Component } from 'react'
+import React, { Component } from 'react'
+import PropTypes from 'prop-types'
 import { connect } from 'react-redux'
 import { setContentView } from '../../ducks/ui/flow';
 import Dropdown from '../common/Dropdown'
@@ -10,7 +11,7 @@ ViewSelector.propTypes = {
     setContentView: PropTypes.func.isRequired
 }
 
-function ViewSelector ({contentViews, activeView, setContentView}){
+export function ViewSelector ({contentViews, activeView, setContentView}){
     let inner = <span> <b>View:</b> {activeView.toLowerCase()} <span className="caret"></span> </span>
 
     return (

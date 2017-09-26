@@ -1,11 +1,12 @@
 """
-This script makes it possible to use mitmproxy in scenarios where IP spoofing has been used to redirect
-connections to mitmproxy. The way this works is that we rely on either the TLS Server Name Indication (SNI) or the
-Host header of the HTTP request.
-Of course, this is not foolproof - if an HTTPS connection comes without SNI, we don't
-know the actual target and cannot construct a certificate that looks valid.
-Similarly, if there's no Host header or a spoofed Host header, we're out of luck as well.
-Using transparent mode is the better option most of the time.
+This script makes it possible to use mitmproxy in scenarios where IP spoofing
+has been used to redirect connections to mitmproxy. The way this works is that
+we rely on either the TLS Server Name Indication (SNI) or the Host header of the
+HTTP request. Of course, this is not foolproof - if an HTTPS connection comes
+without SNI, we don't know the actual target and cannot construct a certificate
+that looks valid. Similarly, if there's no Host header or a spoofed Host header,
+we're out of luck as well. Using transparent mode is the better option most of
+the time.
 
 Usage:
     mitmproxy
@@ -13,6 +14,8 @@ Usage:
         -s dns_spoofing.py
         # Used as the target location if neither SNI nor host header are present.
         -R http://example.com/
+        # To avoid auto rewriting of host header by the reverse proxy target.
+        --keep-host-header
     mitmdump
         -p 80
         -R http://localhost:443/
@@ -29,13 +32,6 @@ parse_host_header = re.compile(r"^(?P<host>[^:]+|\[.+\])(?::(?P<port>\d+))?$")
 
 
 class Rerouter:
-    def requestheaders(self, flow):
-        """
-        The original host header is retrieved early
-        before flow.request is replaced by mitmproxy new outgoing request
-        """
-        flow.metadata["original_host"] = flow.request.headers["Host"]
-
     def request(self, flow):
         if flow.client_conn.ssl_established:
             flow.request.scheme = "https"
@@ -46,17 +42,16 @@ class Rerouter:
             sni = None
             port = 80
 
-        host_header = flow.metadata["original_host"]
+        host_header = flow.request.host_header
         m = parse_host_header.match(host_header)
         if m:
             host_header = m.group("host").strip("[]")
             if m.group("port"):
                 port = int(m.group("port"))
 
-        flow.request.headers["Host"] = host_header
+        flow.request.host_header = host_header
         flow.request.host = sni or host_header
         flow.request.port = port
 
 
-def start():
-    return Rerouter()
+addons = [Rerouter()]

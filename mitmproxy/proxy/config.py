@@ -1,15 +1,14 @@
-import collections
 import os
 import re
-from typing import Any
+import typing
 
 from OpenSSL import SSL, crypto
 
 from mitmproxy import exceptions
 from mitmproxy import options as moptions
 from mitmproxy import certs
-from mitmproxy.net import tcp
-from mitmproxy.net.http import url
+from mitmproxy.net import tls
+from mitmproxy.net import server_spec
 
 CONF_BASENAME = "mitmproxy"
 
@@ -23,8 +22,7 @@ class HostMatcher:
     def __call__(self, address):
         if not address:
             return False
-        address = tcp.Address.wrap(address)
-        host = "%s:%s" % (address.host, address.port)
+        host = "%s:%s" % address
         if any(rex.search(host) for rex in self.regexes):
             return True
         else:
@@ -34,38 +32,21 @@ class HostMatcher:
         return bool(self.patterns)
 
 
-ServerSpec = collections.namedtuple("ServerSpec", "scheme address")
-
-
-def parse_server_spec(spec):
-    try:
-        p = url.parse(spec)
-        if p[0] not in (b"http", b"https"):
-            raise ValueError()
-    except ValueError:
-        raise exceptions.OptionsError(
-            "Invalid server specification: %s" % spec
-        )
-    host, port = p[1:3]
-    address = tcp.Address((host.decode("ascii"), port))
-    scheme = p[0].decode("ascii").lower()
-    return ServerSpec(scheme, address)
-
-
 class ProxyConfig:
 
     def __init__(self, options: moptions.Options) -> None:
         self.options = options
 
-        self.check_ignore = None
-        self.check_tcp = None
-        self.certstore = None
-        self.clientcerts = None
-        self.openssl_verification_mode_server = None
+        self.check_ignore = None  # type: HostMatcher
+        self.check_tcp = None  # type: HostMatcher
+        self.certstore = None  # type: certs.CertStore
+        self.client_certs = None  # type: str
+        self.openssl_verification_mode_server = None  # type: int
+        self.upstream_server = None  # type: typing.Optional[server_spec.ServerSpec]
         self.configure(options, set(options.keys()))
         options.changed.connect(self.configure)
 
-    def configure(self, options: moptions.Options, updated: Any) -> None:
+    def configure(self, options: moptions.Options, updated: typing.Any) -> None:
         if options.add_upstream_certs_to_client_chain and not options.ssl_insecure:
             raise exceptions.OptionsError(
                 "The verify-upstream-cert requires certificate verification to be disabled. "
@@ -78,13 +59,15 @@ class ProxyConfig:
         else:
             self.openssl_verification_mode_server = SSL.VERIFY_PEER
 
-        self.check_ignore = HostMatcher(options.ignore_hosts)
-        self.check_tcp = HostMatcher(options.tcp_hosts)
+        if "ignore_hosts" in updated:
+            self.check_ignore = HostMatcher(options.ignore_hosts)
+        if "tcp_hosts" in updated:
+            self.check_tcp = HostMatcher(options.tcp_hosts)
 
         self.openssl_method_client, self.openssl_options_client = \
-            tcp.sslversion_choices[options.ssl_version_client]
+            tls.VERSION_CHOICES[options.ssl_version_client]
         self.openssl_method_server, self.openssl_options_server = \
-            tcp.sslversion_choices[options.ssl_version_server]
+            tls.VERSION_CHOICES[options.ssl_version_server]
 
         certstore_path = os.path.expanduser(options.cadir)
         if not os.path.exists(os.path.dirname(certstore_path)):
@@ -97,28 +80,32 @@ class ProxyConfig:
             CONF_BASENAME
         )
 
-        if options.clientcerts:
-            clientcerts = os.path.expanduser(options.clientcerts)
-            if not os.path.exists(clientcerts):
+        if options.client_certs:
+            client_certs = os.path.expanduser(options.client_certs)
+            if not os.path.exists(client_certs):
                 raise exceptions.OptionsError(
                     "Client certificate path does not exist: %s" %
-                    options.clientcerts
+                    options.client_certs
                 )
-            self.clientcerts = clientcerts
+            self.client_certs = client_certs
 
-        for spec, cert in options.certs:
-            cert = os.path.expanduser(cert)
+        for c in options.certs:
+            parts = c.split("=", 1)
+            if len(parts) == 1:
+                parts = ["*", parts[0]]
+
+            cert = os.path.expanduser(parts[1])
             if not os.path.exists(cert):
                 raise exceptions.OptionsError(
                     "Certificate file does not exist: %s" % cert
                 )
             try:
-                self.certstore.add_cert_file(spec, cert)
+                self.certstore.add_cert_file(parts[0], cert)
             except crypto.Error:
                 raise exceptions.OptionsError(
                     "Invalid certificate format: %s" % cert
                 )
-
-        self.upstream_server = None
-        if options.upstream_server:
-            self.upstream_server = parse_server_spec(options.upstream_server)
+        m = options.mode
+        if m.startswith("upstream:") or m.startswith("reverse:"):
+            _, spec = server_spec.parse_with_mode(options.mode)
+            self.upstream_server = spec

@@ -1,31 +1,34 @@
 import argparse
-from mitmproxy.tools import cmdline
+
+from mitmproxy import options
+from mitmproxy.tools import cmdline, web, dump, console
+from mitmproxy.tools import main
 
 
 def test_common():
     parser = argparse.ArgumentParser()
-    cmdline.common_options(parser)
-    opts = parser.parse_args(args=[])
-
-    assert cmdline.get_common_options(opts)
-
-    opts.stickycookie_filt = "foo"
-    opts.stickyauth_filt = "foo"
-    v = cmdline.get_common_options(opts)
-    assert v["stickycookie"] == "foo"
-    assert v["stickyauth"] == "foo"
+    opts = options.Options()
+    cmdline.common_options(parser, opts)
+    args = parser.parse_args(args=[])
+    assert main.process_options(parser, opts, args)
 
 
 def test_mitmproxy():
-    ap = cmdline.mitmproxy()
+    opts = options.Options()
+    console.master.ConsoleMaster(opts)
+    ap = cmdline.mitmproxy(opts)
     assert ap
 
 
 def test_mitmdump():
-    ap = cmdline.mitmdump()
+    opts = options.Options()
+    dump.DumpMaster(opts)
+    ap = cmdline.mitmdump(opts)
     assert ap
 
 
 def test_mitmweb():
-    ap = cmdline.mitmweb()
+    opts = options.Options()
+    web.master.WebMaster(opts)
+    ap = cmdline.mitmweb(opts)
     assert ap

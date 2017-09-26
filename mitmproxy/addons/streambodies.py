@@ -1,14 +1,19 @@
 from mitmproxy.net.http import http1
 from mitmproxy import exceptions
 from mitmproxy import ctx
+from mitmproxy.utils import human
 
 
 class StreamBodies:
     def __init__(self):
         self.max_size = None
 
-    def configure(self, options, updated):
-        self.max_size = options.stream_large_bodies
+    def configure(self, updated):
+        if "stream_large_bodies" in updated and ctx.options.stream_large_bodies:
+            try:
+                self.max_size = human.parse_size(ctx.options.stream_large_bodies)
+            except ValueError as e:
+                raise exceptions.OptionsError(e)
 
     def run(self, f, is_request):
         if self.max_size:
@@ -23,12 +28,18 @@ class StreamBodies:
             if expected_size and not r.raw_content and not (0 <= expected_size <= self.max_size):
                 # r.stream may already be a callable, which we want to preserve.
                 r.stream = r.stream or True
-                # FIXME: make message generic when we add rquest streaming
-                ctx.log.info("Streaming response from %s" % f.request.host)
+                ctx.log.info("Streaming {} {}".format("response from" if not is_request else "request to", f.request.host))
 
-    # FIXME! Request streaming doesn't work at the moment.
     def requestheaders(self, f):
         self.run(f, True)
 
     def responseheaders(self, f):
         self.run(f, False)
+
+    def websocket_start(self, f):
+        if ctx.options.stream_websockets:
+            f.stream = True
+            ctx.log.info("Streaming WebSocket messages between {client} and {server}".format(
+                client=human.format_address(f.client_conn.address),
+                server=human.format_address(f.server_conn.address))
+            )

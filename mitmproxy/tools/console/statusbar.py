@@ -2,11 +2,10 @@ import os.path
 
 import urwid
 
-import mitmproxy.net.http.url
 from mitmproxy.tools.console import common
-from mitmproxy.tools.console import pathedit
 from mitmproxy.tools.console import signals
-from mitmproxy.utils import human
+from mitmproxy.tools.console import commandeditor
+import mitmproxy.tools.console.master # noqa
 
 
 class PromptPath:
@@ -33,20 +32,18 @@ class PromptStub:
 
 class ActionBar(urwid.WidgetWrap):
 
-    def __init__(self):
+    def __init__(self, master):
+        self.master = master
         urwid.WidgetWrap.__init__(self, None)
         self.clear()
         signals.status_message.connect(self.sig_message)
         signals.status_prompt.connect(self.sig_prompt)
-        signals.status_prompt_path.connect(self.sig_path_prompt)
         signals.status_prompt_onekey.connect(self.sig_prompt_onekey)
-
-        self.last_path = ""
+        signals.status_prompt_command.connect(self.sig_prompt_command)
 
         self.prompting = None
 
         self.onekey = False
-        self.pathprompt = False
 
     def sig_message(self, sender, message, expire=1):
         if self.prompting:
@@ -67,14 +64,10 @@ class ActionBar(urwid.WidgetWrap):
         self._w = urwid.Edit(self.prep_prompt(prompt), text or "")
         self.prompting = PromptStub(callback, args)
 
-    def sig_path_prompt(self, sender, prompt, callback, args=()):
+    def sig_prompt_command(self, sender, partial=""):
         signals.focus.send(self, section="footer")
-        self._w = pathedit.PathEdit(
-            self.prep_prompt(prompt),
-            os.path.dirname(self.last_path)
-        )
-        self.pathprompt = True
-        self.prompting = PromptPath(callback, args)
+        self._w = commandeditor.CommandEdit(partial)
+        self.prompting = commandeditor.CommandExecutor(self.master)
 
     def sig_prompt_onekey(self, sender, prompt, keys, callback, args=()):
         """
@@ -121,13 +114,10 @@ class ActionBar(urwid.WidgetWrap):
     def prompt_done(self):
         self.prompting = None
         self.onekey = False
-        self.pathprompt = False
         signals.status_message.send(message="")
         signals.focus.send(self, section="body")
 
     def prompt_execute(self, txt):
-        if self.pathprompt:
-            self.last_path = txt
         p = self.prompting
         self.prompt_done()
         msg = p(txt)
@@ -136,12 +126,15 @@ class ActionBar(urwid.WidgetWrap):
 
 
 class StatusBar(urwid.WidgetWrap):
+    keyctx = ""
 
-    def __init__(self, master: "mitmproxy.console.master.ConsoleMaster", helptext):
+    def __init__(
+        self, master: "mitmproxy.tools.console.master.ConsoleMaster"
+    ) -> None:
         self.master = master
-        self.helptext = helptext
         self.ib = urwid.WidgetWrap(urwid.Text(""))
-        super().__init__(urwid.Pile([self.ib, self.master.ab]))
+        self.ab = ActionBar(self.master)
+        super().__init__(urwid.Pile([self.ib, self.ab]))
         signals.update_settings.connect(self.sig_update)
         signals.flowlist_change.connect(self.sig_update)
         master.options.changed.connect(self.sig_update)
@@ -152,7 +145,7 @@ class StatusBar(urwid.WidgetWrap):
         self.redraw()
 
     def keypress(self, *args, **kwargs):
-        return self.master.ab.keypress(*args, **kwargs)
+        return self.ab.keypress(*args, **kwargs)
 
     def get_status(self):
         r = []
@@ -186,12 +179,14 @@ class StatusBar(urwid.WidgetWrap):
             r.append("CP:%d]" % len(self.master.options.tcp_hosts))
         if self.master.options.intercept:
             r.append("[")
+            if not self.master.options.intercept_active:
+                r.append("X")
             r.append(("heading_key", "i"))
             r.append(":%s]" % self.master.options.intercept)
-        if self.master.options.filter:
+        if self.master.options.view_filter:
             r.append("[")
             r.append(("heading_key", "f"))
-            r.append(":%s]" % self.master.options.filter)
+            r.append(":%s]" % self.master.options.view_filter)
         if self.master.options.stickycookie:
             r.append("[")
             r.append(("heading_key", "t"))
@@ -204,10 +199,10 @@ class StatusBar(urwid.WidgetWrap):
             r.append("[")
             r.append(("heading_key", "M"))
             r.append(":%s]" % self.master.options.default_contentview)
-        if self.master.options.console_order:
+        if self.master.options.has_changed("view_order"):
             r.append("[")
             r.append(("heading_key", "o"))
-            r.append(":%s]" % self.master.options.console_order)
+            r.append(":%s]" % self.master.options.view_order)
 
         opts = []
         if self.master.options.anticache:
@@ -220,34 +215,25 @@ class StatusBar(urwid.WidgetWrap):
             opts.append("norefresh")
         if self.master.options.replay_kill_extra:
             opts.append("killextra")
-        if self.master.options.no_upstream_cert:
+        if not self.master.options.upstream_cert:
             opts.append("no-upstream-cert")
         if self.master.options.console_focus_follow:
             opts.append("following")
         if self.master.options.stream_large_bodies:
-            opts.append(
-                "stream:%s" % human.pretty_size(
-                    self.master.options.stream_large_bodies
-                )
-            )
+            opts.append(self.master.options.stream_large_bodies)
 
         if opts:
             r.append("[%s]" % (":".join(opts)))
 
-        if self.master.options.mode in ["reverse", "upstream"]:
-            dst = self.master.server.config.upstream_server
-            r.append("[dest:%s]" % mitmproxy.net.http.url.unparse(
-                dst.scheme,
-                dst.address.host,
-                dst.address.port
-            ))
+        if self.master.options.mode != "regular":
+            r.append("[%s]" % self.master.options.mode)
         if self.master.options.scripts:
             r.append("[")
             r.append(("heading_key", "s"))
             r.append("cripts:%s]" % len(self.master.options.scripts))
 
-        if self.master.options.streamfile:
-            r.append("[W:%s]" % self.master.options.streamfile)
+        if self.master.options.save_stream_file:
+            r.append("[W:%s]" % self.master.options.save_stream_file)
 
         return r
 
@@ -258,7 +244,7 @@ class StatusBar(urwid.WidgetWrap):
         else:
             offset = self.master.view.focus.index + 1
 
-        if self.master.options.console_order_reversed:
+        if self.master.options.view_order_reversed:
             arrow = common.SYMBOL_UP
         else:
             arrow = common.SYMBOL_DOWN
@@ -271,30 +257,19 @@ class StatusBar(urwid.WidgetWrap):
             ('heading', ("%s %s [%s/%s]" % (arrow, marked, offset, fc)).ljust(11)),
         ]
 
-        if self.master.server.bound:
-            host = self.master.server.address.host
-            if host == "0.0.0.0":
+        if self.master.options.server:
+            host = self.master.options.listen_host
+            if host == "0.0.0.0" or host == "":
                 host = "*"
-            boundaddr = "[%s:%s]" % (host, self.master.server.address.port)
+            boundaddr = "[%s:%s]" % (host, self.master.options.listen_port)
         else:
             boundaddr = ""
         t.extend(self.get_status())
         status = urwid.AttrWrap(urwid.Columns([
             urwid.Text(t),
-            urwid.Text(
-                [
-                    self.helptext,
-                    boundaddr
-                ],
-                align="right"
-            ),
+            urwid.Text(boundaddr, align="right"),
         ]), "heading")
         self.ib._w = status
-
-    def update(self, text):
-        self.helptext = text
-        self.redraw()
-        self.master.loop.draw_screen()
 
     def selectable(self):
         return True

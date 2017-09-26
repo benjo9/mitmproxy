@@ -1,4 +1,5 @@
-import React, { Component, PropTypes } from 'react'
+import React, { Component } from 'react'
+import PropTypes from 'prop-types'
 import { connect } from 'react-redux'
 import { render } from 'react-dom';
 import Button from '../common/Button';
@@ -11,7 +12,7 @@ ShowFullContentButton.propTypes = {
         showFullContent: PropTypes.bool.isRequired
 }
 
-function ShowFullContentButton ( {setShowFullContent, showFullContent, visibleLines, contentLines} ){
+export function ShowFullContentButton ( {setShowFullContent, showFullContent, visibleLines, contentLines} ){
 
     return (
         !showFullContent &&

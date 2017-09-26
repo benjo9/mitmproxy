@@ -1,10 +1,10 @@
-import cgi
+import html
+from typing import Optional
 
 from mitmproxy import flow
 
 from mitmproxy.net import http
 from mitmproxy import version
-from mitmproxy.net import tcp
 from mitmproxy import connections  # noqa
 
 
@@ -52,9 +52,7 @@ class HTTPRequest(http.Request):
 
     def get_state(self):
         state = super().get_state()
-        state.update(
-            is_replay=self.is_replay
-        )
+        state["is_replay"] = self.is_replay
         return state
 
     def set_state(self, state):
@@ -167,11 +165,12 @@ class HTTPFlow(flow.Flow):
         """ What mode was the proxy layer in when receiving this request? """
 
     _stateobject_attributes = flow.Flow._stateobject_attributes.copy()
-    _stateobject_attributes.update(
+    # mypy doesn't support update with kwargs
+    _stateobject_attributes.update(dict(
         request=HTTPRequest,
         response=HTTPResponse,
         mode=str
-    )
+    ))
 
     def __repr__(self):
         s = "<HTTPFlow"
@@ -203,17 +202,27 @@ class HTTPFlow(flow.Flow):
         return c
 
 
-def make_error_response(status_code, message, headers=None):
-    response = http.status_codes.RESPONSES.get(status_code, "Unknown")
+def make_error_response(
+        status_code: int,
+        message: str="",
+        headers: Optional[http.Headers]=None,
+) -> HTTPResponse:
+    reason = http.status_codes.RESPONSES.get(status_code, "Unknown")
     body = """
         <html>
             <head>
-                <title>%d %s</title>
+                <title>{status_code} {reason}</title>
             </head>
-            <body>%s</body>
+            <body>
+            <h1>{status_code} {reason}</h1>
+            <p>{message}</p>
+            </body>
         </html>
-    """.strip() % (status_code, response, cgi.escape(message))
-    body = body.encode("utf8", "replace")
+    """.strip().format(
+        status_code=status_code,
+        reason=reason,
+        message=html.escape(message),
+    ).encode("utf8", "replace")
 
     if not headers:
         headers = http.Headers(
@@ -226,16 +235,15 @@ def make_error_response(status_code, message, headers=None):
     return HTTPResponse(
         b"HTTP/1.1",
         status_code,
-        response,
+        reason,
         headers,
         body,
     )
 
 
 def make_connect_request(address):
-    address = tcp.Address.wrap(address)
     return HTTPRequest(
-        "authority", b"CONNECT", None, address.host, address.port, None, b"HTTP/1.1",
+        "authority", b"CONNECT", None, address[0], address[1], None, b"HTTP/1.1",
         http.Headers(), b""
     )
 

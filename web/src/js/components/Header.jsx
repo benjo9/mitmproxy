@@ -1,4 +1,5 @@
-import React, { Component, PropTypes } from 'react'
+import React, { Component } from 'react'
+import PropTypes from 'prop-types'
 import { connect } from 'react-redux'
 import classnames from 'classnames'
 import MainMenu from './Header/MainMenu'
@@ -6,6 +7,8 @@ import OptionMenu from './Header/OptionMenu'
 import FileMenu from './Header/FileMenu'
 import FlowMenu from './Header/FlowMenu'
 import {setActiveMenu} from '../ducks/ui/header'
+import ConnectionIndicator from "./Header/ConnectionIndicator"
+import HideInStatic from './common/HideInStatic'
 
 class Header extends Component {
     static entries = [MainMenu, OptionMenu]
@@ -38,10 +41,13 @@ class Header extends Component {
                             {Entry.title}
                         </a>
                     ))}
+                    <HideInStatic>
+                        <ConnectionIndicator/>
+                    </HideInStatic>
                 </nav>
-                <menu>
+                <div>
                     <Active/>
-                </menu>
+                </div>
             </header>
         )
     }

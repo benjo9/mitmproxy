@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 '''
-@author: David Shaw, david.shaw.aw@gmail.com
+@author: David Shaw, shawd@vmware.com
 
 Inspired by EAS Inspector for Fiddler
 https://easinspectorforfiddler.codeplex.com
@@ -39,12 +39,12 @@ class ASWBXMLCodePage:
 		self.tagLookup[tag] = token
 	
 	def getToken(self, tag):
-		if self.tagLookup.has_key(tag):
+		if tag in self.tagLookup:
 			return self.tagLookup[tag]
 		return 0xFF
 	
 	def getTag(self, token):
-		if self.tokenLookup.has_key(token):
+		if token in self.tokenLookup:
 			return self.tokenLookup[token]
 		return None
 	

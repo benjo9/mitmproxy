@@ -27,12 +27,13 @@ def flowdetails(state, flow: http.HTTPFlow):
         text.append(urwid.Text([("head", "Metadata:")]))
         text.extend(common.format_keyvals(parts, key="key", val="text", indent=4))
 
-    if sc is not None:
+    if sc is not None and sc.ip_address:
         text.append(urwid.Text([("head", "Server Connection:")]))
         parts = [
-            ["Address", repr(sc.address)],
-            ["Resolved Address", repr(sc.ip_address)],
+            ["Address", human.format_address(sc.address)],
         ]
+        if sc.ip_address:
+            parts.append(["Resolved Address", human.format_address(sc.ip_address)])
         if resp:
             parts.append(["HTTP Version", resp.http_version])
         if sc.alpn_proto_negotiated:
@@ -92,7 +93,7 @@ def flowdetails(state, flow: http.HTTPFlow):
         text.append(urwid.Text([("head", "Client Connection:")]))
 
         parts = [
-            ["Address", repr(cc.address)],
+            ["Address", "{}:{}".format(cc.address[0], cc.address[1])],
         ]
         if req:
             parts.append(["HTTP Version", req.http_version])
@@ -182,4 +183,4 @@ def flowdetails(state, flow: http.HTTPFlow):
         text.append(urwid.Text([("head", "Timing:")]))
         text.extend(common.format_keyvals(parts, key="key", val="text", indent=4))
 
-    return searchable.Searchable(state, text)
+    return searchable.Searchable(text)

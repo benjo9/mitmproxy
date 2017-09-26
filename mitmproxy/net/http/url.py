@@ -1,24 +1,8 @@
-import urllib
+import urllib.parse
 from typing import Sequence
 from typing import Tuple
 
 from mitmproxy.net import check
-
-
-# PY2 workaround
-def decode_parse_result(result, enc):
-    if hasattr(result, "decode"):
-        return result.decode(enc)
-    else:
-        return urllib.parse.ParseResult(*[x.decode(enc) for x in result])
-
-
-# PY2 workaround
-def encode_parse_result(result, enc):
-    if hasattr(result, "encode"):
-        return result.encode(enc)
-    else:
-        return urllib.parse.ParseResult(*[x.encode(enc) for x in result])
 
 
 def parse(url):
@@ -47,12 +31,12 @@ def parse(url):
 
         # this should not raise a ValueError,
         # but we try to be very forgiving here and accept just everything.
-        # decode_parse_result(parsed, "ascii")
     else:
         host = parsed.hostname.encode("idna")
-        parsed = encode_parse_result(parsed, "ascii")
+        if isinstance(parsed, urllib.parse.ParseResult):
+            parsed = parsed.encode("ascii")
 
-    port = parsed.port
+    port = parsed.port  # Returns None if port number invalid in Py3.5. Will throw ValueError in Py3.6
     if not port:
         port = 443 if parsed.scheme == b"https" else 80
 
@@ -64,8 +48,6 @@ def parse(url):
 
     if not check.is_valid_host(host):
         raise ValueError("Invalid Host")
-    if not check.is_valid_port(port):
-        raise ValueError("Invalid Port")
 
     return parsed.scheme, host, port, full_path
 
@@ -82,11 +64,24 @@ def unparse(scheme, host, port, path=""):
     return "%s://%s%s" % (scheme, hostport(scheme, host, port), path)
 
 
-def encode(s: Sequence[Tuple[str, str]]) -> str:
+def encode(s: Sequence[Tuple[str, str]], similar_to: str=None) -> str:
     """
         Takes a list of (key, value) tuples and returns a urlencoded string.
+        If similar_to is passed, the output is formatted similar to the provided urlencoded string.
     """
-    return urllib.parse.urlencode(s, False, errors="surrogateescape")
+
+    remove_trailing_equal = False
+    if similar_to:
+        remove_trailing_equal = any("=" not in param for param in similar_to.split("&"))
+
+    encoded = urllib.parse.urlencode(s, False, errors="surrogateescape")
+
+    if remove_trailing_equal:
+        encoded = encoded.replace("=&", "&")
+        if encoded[-1] == '=':
+            encoded = encoded[:-1]
+
+    return encoded
 
 
 def decode(s):

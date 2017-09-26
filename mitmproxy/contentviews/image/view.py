@@ -1,55 +1,48 @@
-import io
 import imghdr
 
-from PIL import Image
-
+from mitmproxy.contentviews import base
 from mitmproxy.types import multidict
 from . import image_parser
 
-from mitmproxy.contentviews import base
+
+def test_ico(h, f):
+    if h.startswith(b"\x00\x00\x01\x00"):
+        return "ico"
+
+
+imghdr.tests.append(test_ico)
 
 
 class ViewImage(base.View):
     name = "Image"
     prompt = ("image", "i")
+
+    # there is also a fallback in the auto view for image/*.
     content_types = [
         "image/png",
         "image/jpeg",
         "image/gif",
         "image/vnd.microsoft.icon",
         "image/x-icon",
+        "image/webp",
     ]
 
     def __call__(self, data, **metadata):
         image_type = imghdr.what('', h=data)
         if image_type == 'png':
-            f = "PNG"
-            parts = image_parser.parse_png(data)
-            fmt = base.format_dict(multidict.MultiDict(parts))
-            return "%s image" % f, fmt
+            image_metadata = image_parser.parse_png(data)
         elif image_type == 'gif':
-            f = "GIF"
-            parts = image_parser.parse_gif(data)
-            fmt = base.format_dict(multidict.MultiDict(parts))
-            return "%s image" % f, fmt
+            image_metadata = image_parser.parse_gif(data)
         elif image_type == 'jpeg':
-            f = "JPEG"
-            parts = image_parser.parse_jpeg(data)
-            fmt = base.format_dict(multidict.MultiDict(parts))
-            return "%s image" % f, fmt
-        try:
-            img = Image.open(io.BytesIO(data))
-        except IOError:
-            return None
-        parts = [
-            ("Format", str(img.format_description)),
-            ("Size", "%s x %s px" % img.size),
-            ("Mode", str(img.mode)),
-        ]
-        for i in sorted(img.info.keys()):
-            if i != "exif":
-                parts.append(
-                    (str(i), str(img.info[i]))
-                )
-        fmt = base.format_dict(multidict.MultiDict(parts))
-        return "%s image" % img.format, fmt
+            image_metadata = image_parser.parse_jpeg(data)
+        elif image_type == 'ico':
+            image_metadata = image_parser.parse_ico(data)
+        else:
+            image_metadata = [
+                ("Image Format", image_type or "unknown")
+            ]
+        if image_type:
+            view_name = "{} Image".format(image_type.upper())
+        else:
+            view_name = "Unknown Image"
+        return view_name, base.format_dict(multidict.MultiDict(image_metadata))

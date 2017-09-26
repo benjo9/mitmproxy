@@ -3,20 +3,21 @@ import webbrowser
 import tornado.httpserver
 import tornado.ioloop
 from mitmproxy import addons
-from mitmproxy import exceptions
 from mitmproxy import log
 from mitmproxy import master
+from mitmproxy import optmanager
 from mitmproxy.addons import eventstore
 from mitmproxy.addons import intercept
+from mitmproxy.addons import readfile
 from mitmproxy.addons import termlog
 from mitmproxy.addons import view
-from mitmproxy.options import Options  # noqa
-from mitmproxy.tools.web import app
+from mitmproxy.addons import termstatus
+from mitmproxy.tools.web import app, webaddons, static_viewer
 
 
 class WebMaster(master.Master):
-    def __init__(self, options, server, with_termlog=True):
-        super().__init__(options, server)
+    def __init__(self, options, with_termlog=True):
+        super().__init__(options)
         self.view = view.View()
         self.view.sig_view_add.connect(self._sig_view_add)
         self.view.sig_view_remove.connect(self._sig_view_remove)
@@ -28,28 +29,22 @@ class WebMaster(master.Master):
         self.events.sig_refresh.connect(self._sig_events_refresh)
 
         self.options.changed.connect(self._sig_options_update)
+        self.options.changed.connect(self._sig_settings_update)
 
         self.addons.add(*addons.default_addons())
         self.addons.add(
+            webaddons.WebAddon(),
             intercept.Intercept(),
+            readfile.ReadFile(),
+            static_viewer.StaticViewer(),
             self.view,
             self.events,
         )
         if with_termlog:
-            self.addons.add(termlog.TermLog())
+            self.addons.add(termlog.TermLog(), termstatus.TermStatus())
         self.app = app.Application(
             self, self.options.web_debug
         )
-        # This line is just for type hinting
-        self.options = self.options  # type: Options
-        if options.rfile:
-            try:
-                self.load_flows_file(options.rfile)
-            except exceptions.FlowReadException as v:
-                self.add_log(
-                    "Could not read flow file: %s" % v,
-                    "error"
-                )
 
     def _sig_view_add(self, view, flow):
         app.ClientConnection.broadcast(
@@ -92,6 +87,14 @@ class WebMaster(master.Master):
         )
 
     def _sig_options_update(self, options, updated):
+        options_dict = optmanager.dump_dicts(options, updated)
+        app.ClientConnection.broadcast(
+            resource="options",
+            cmd="update",
+            data=options_dict
+        )
+
+    def _sig_settings_update(self, options, updated):
         app.ClientConnection.broadcast(
             resource="settings",
             cmd="update",
@@ -108,11 +111,6 @@ class WebMaster(master.Master):
         iol.add_callback(self.start)
         tornado.ioloop.PeriodicCallback(lambda: self.tick(timeout=0), 5).start()
 
-        self.add_log(
-            "Proxy server listening at http://{}/".format(self.server.address),
-            "info"
-        )
-
         web_url = "http://{}:{}/".format(self.options.web_iface, self.options.web_port)
         self.add_log(
             "Web   server listening at {}".format(web_url),
@@ -126,11 +124,14 @@ class WebMaster(master.Master):
                     "No web browser found. Please open a browser and point it to {}".format(web_url),
                     "info"
                 )
-
         try:
             iol.start()
         except KeyboardInterrupt:
             self.shutdown()
+
+    def shutdown(self):
+        tornado.ioloop.IOLoop.instance().stop()
+        super().shutdown()
 
 
 def open_browser(url: str) -> bool:

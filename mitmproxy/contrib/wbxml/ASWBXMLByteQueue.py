@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 '''
-@author: David Shaw, david.shaw.aw@gmail.com
+@author: David Shaw, shawd@vmware.com
 
 Inspired by EAS Inspector for Fiddler
 https://easinspectorforfiddler.codeplex.com
@@ -40,7 +40,7 @@ class ASWBXMLByteQueue(Queue):
         Queue.__init__(self)
 
         for byte in wbxmlBytes:
-            self.put(ord(byte))
+            self.put(byte)
             self.bytesEnqueued += 1
 
 

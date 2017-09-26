@@ -22,10 +22,10 @@ from mitmproxy import exceptions
 from mitmproxy.net import http
 from mitmproxy.utils import strutils
 from . import (
-    auto, raw, hex, json, xml_html, html_outline, wbxml, javascript, css,
+    auto, raw, hex, json, xml_html, wbxml, javascript, css,
     urlencoded, multipart, image, query, protobuf
 )
-from .base import View, VIEW_CUTOFF, KEY_MAX, format_text, format_dict
+from .base import View, VIEW_CUTOFF, KEY_MAX, format_text, format_dict, TViewResult
 
 views = []  # type: List[View]
 content_types_map = {}  # type: Dict[str, List[View]]
@@ -36,12 +36,14 @@ def get(name: str) -> Optional[View]:
     for i in views:
         if i.name.lower() == name.lower():
             return i
+    return None
 
 
 def get_by_shortcut(c: str) -> Optional[View]:
     for i in views:
         if i.prompt[1] == c:
             return i
+    return None
 
 
 def add(view: View) -> None:
@@ -159,25 +161,23 @@ def get_content_view(viewmode: View, data: bytes, **metadata):
     return desc, safe_to_print(content), error
 
 
+# The order in which ContentViews are added is important!
 add(auto.ViewAuto())
 add(raw.ViewRaw())
 add(hex.ViewHex())
 add(json.ViewJSON())
 add(xml_html.ViewXmlHtml())
 add(wbxml.ViewWBXML())
-add(html_outline.ViewHTMLOutline())
 add(javascript.ViewJavaScript())
 add(css.ViewCSS())
 add(urlencoded.ViewURLEncoded())
 add(multipart.ViewMultipart())
 add(image.ViewImage())
 add(query.ViewQuery())
-
-if protobuf.ViewProtobuf.is_available():
-    add(protobuf.ViewProtobuf())
+add(protobuf.ViewProtobuf())
 
 __all__ = [
-    "View", "VIEW_CUTOFF", "KEY_MAX", "format_text", "format_dict",
+    "View", "VIEW_CUTOFF", "KEY_MAX", "format_text", "format_dict", "TViewResult",
     "get", "get_by_shortcut", "add", "remove",
     "get_content_view", "get_message_content_view",
 ]

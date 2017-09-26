@@ -1,11 +1,12 @@
+import io
 import re
 import codecs
-from typing import AnyStr, Optional
+from typing import AnyStr, Optional, cast, Iterable
 
 
 def always_bytes(str_or_bytes: Optional[AnyStr], *encode_args) -> Optional[bytes]:
     if isinstance(str_or_bytes, bytes) or str_or_bytes is None:
-        return str_or_bytes
+        return cast(Optional[bytes], str_or_bytes)
     elif isinstance(str_or_bytes, str):
         return str_or_bytes.encode(*encode_args)
     else:
@@ -18,16 +19,17 @@ def always_str(str_or_bytes: Optional[AnyStr], *decode_args) -> Optional[str]:
         str_or_bytes unmodified, if
     """
     if isinstance(str_or_bytes, str) or str_or_bytes is None:
-        return str_or_bytes
+        return cast(Optional[str], str_or_bytes)
     elif isinstance(str_or_bytes, bytes):
         return str_or_bytes.decode(*decode_args)
     else:
         raise TypeError("Expected str or bytes, but got {}.".format(type(str_or_bytes).__name__))
 
 
-# Translate control characters to "safe" characters. This implementation initially
-# replaced them with the matching control pictures (http://unicode.org/charts/PDF/U2400.pdf),
-# but that turned out to render badly with monospace fonts. We are back to "." therefore.
+# Translate control characters to "safe" characters. This implementation
+# initially replaced them with the matching control pictures
+# (http://unicode.org/charts/PDF/U2400.pdf), but that turned out to render badly
+# with monospace fonts. We are back to "." therefore.
 _control_char_trans = {
     x: ord(".")  # x + 0x2400 for unicode control group pictures
     for x in range(32)
@@ -140,3 +142,85 @@ def hexdump(s):
             False
         ))
         yield (offset, x, part_repr)
+
+
+def _move_to_private_code_plane(matchobj):
+    return chr(ord(matchobj.group(0)) + 0xE000)
+
+
+def _restore_from_private_code_plane(matchobj):
+    return chr(ord(matchobj.group(0)) - 0xE000)
+
+
+NO_ESCAPE = r"(?<!\\)(?:\\\\)*"
+MULTILINE_CONTENT = r"[\s\S]*?"
+SINGLELINE_CONTENT = r".*?"
+MULTILINE_CONTENT_LINE_CONTINUATION = r"(?:.|(?<=\\)\n)*?"
+
+
+def split_special_areas(
+        data: str,
+        area_delimiter: Iterable[str],
+):
+    """
+    Split a string of code into a [code, special area, code, special area, ..., code] list.
+
+    For example,
+
+    >>> split_special_areas(
+    >>>     "test /* don't modify me */ foo",
+    >>>     [r"/\*[\s\S]*?\*/"])  # (regex matching comments)
+    ["test ", "/* don't modify me */", " foo"]
+
+    "".join(split_special_areas(x, ...)) == x always holds true.
+    """
+    return re.split(
+        "({})".format("|".join(area_delimiter)),
+        data,
+        flags=re.MULTILINE
+    )
+
+
+def escape_special_areas(
+        data: str,
+        area_delimiter: Iterable[str],
+        control_characters,
+):
+    """
+    Escape all control characters present in special areas with UTF8 symbols
+    in the private use plane (U+E000 t+ ord(char)).
+    This is useful so that one can then use regex replacements on the resulting string without
+    interfering with special areas.
+
+    control_characters must be 0 < ord(x) < 256.
+
+    Example:
+
+    >>> print(x)
+    if (true) { console.log('{}'); }
+    >>> x = escape_special_areas(x, "{", ["'" + SINGLELINE_CONTENT + "'"])
+    >>> print(x)
+    if (true) { console.log('�}'); }
+    >>> x = re.sub(r"\s*{\s*", " {\n    ", x)
+    >>> x = unescape_special_areas(x)
+    >>> print(x)
+    if (true) {
+        console.log('{}'); }
+    """
+    buf = io.StringIO()
+    parts = split_special_areas(data, area_delimiter)
+    rex = re.compile(r"[{}]".format(control_characters))
+    for i, x in enumerate(parts):
+        if i % 2:
+            x = rex.sub(_move_to_private_code_plane, x)
+        buf.write(x)
+    return buf.getvalue()
+
+
+def unescape_special_areas(data: str):
+    """
+    Invert escape_special_areas.
+
+    x == unescape_special_areas(escape_special_areas(x)) always holds true.
+    """
+    return re.sub(r"[\ue000-\ue0ff]", _restore_from_private_code_plane, data)

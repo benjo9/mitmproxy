@@ -1,13 +1,16 @@
+from mitmproxy import exceptions
 from mitmproxy.test import tflow
 from mitmproxy.test import taddons
-
 from mitmproxy.addons import streambodies
+import pytest
 
 
 def test_simple():
     sa = streambodies.StreamBodies()
     with taddons.context() as tctx:
-        tctx.configure(sa, stream_large_bodies = 10)
+        with pytest.raises(exceptions.OptionsError):
+            tctx.configure(sa, stream_large_bodies = "invalid")
+        tctx.configure(sa, stream_large_bodies = "10")
 
         f = tflow.tflow()
         f.request.content = b""
@@ -26,3 +29,9 @@ def test_simple():
         f = tflow.tflow(resp=True)
         f.response.headers["content-length"] = "invalid"
         tctx.cycle(sa, f)
+
+        tctx.configure(sa, stream_websockets = True)
+        f = tflow.twebsocketflow()
+        assert not f.stream
+        sa.websocket_start(f)
+        assert f.stream

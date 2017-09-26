@@ -227,7 +227,7 @@ def _get_first_line(rfile):
         if line == b"\r\n" or line == b"\n":
             # Possible leftover from previous message
             line = rfile.readline()
-    except exceptions.TcpDisconnect:
+    except (exceptions.TcpDisconnect, exceptions.TlsException):
         raise exceptions.HttpReadDisconnect("Remote disconnected")
     if not line:
         raise exceptions.HttpReadDisconnect("Remote disconnected")
@@ -271,7 +271,9 @@ def _parse_authority_form(hostport):
             ValueError, if the input is malformed
     """
     try:
-        host, port = hostport.split(b":")
+        host, port = hostport.rsplit(b":", 1)
+        if host.startswith(b"[") and host.endswith(b"]"):
+            host = host[1:-1]
         port = int(port)
         if not check.is_valid_host(host) or not check.is_valid_port(port):
             raise ValueError()

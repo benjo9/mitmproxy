@@ -1,51 +1,57 @@
 import { Key } from "../../utils"
 import { selectTab } from "./flow"
 import * as flowsActions from "../flows"
+import * as modalActions from "./modal"
 
 
 export function onKeyDown(e) {
-    console.debug("onKeyDown", e)
+    //console.debug("onKeyDown", e)
     if (e.ctrlKey) {
         return () => {
         }
     }
-    var key      = e.keyCode
-    var shiftKey = e.shiftKey
+    let key      = e.keyCode,
+        shiftKey = e.shiftKey
     e.preventDefault()
     return (dispatch, getState) => {
 
-        const flow = getState().flows.byId[getState().flows.selected[0]]
+        const flows = getState().flows,
+              flow = flows.byId[getState().flows.selected[0]]
 
         switch (key) {
             case Key.K:
             case Key.UP:
-                dispatch(flowsActions.selectRelative(-1))
+                dispatch(flowsActions.selectRelative(flows, -1))
                 break
 
             case Key.J:
             case Key.DOWN:
-                dispatch(flowsActions.selectRelative(+1))
+                dispatch(flowsActions.selectRelative(flows, +1))
                 break
 
             case Key.SPACE:
             case Key.PAGE_DOWN:
-                dispatch(flowsActions.selectRelative(+10))
+                dispatch(flowsActions.selectRelative(flows, +10))
                 break
 
             case Key.PAGE_UP:
-                dispatch(flowsActions.selectRelative(-10))
+                dispatch(flowsActions.selectRelative(flows, -10))
                 break
 
             case Key.END:
-                dispatch(flowsActions.selectRelative(+1e10))
+                dispatch(flowsActions.selectRelative(flows, +1e10))
                 break
 
             case Key.HOME:
-                dispatch(flowsActions.selectRelative(-1e10))
+                dispatch(flowsActions.selectRelative(flows, -1e10))
                 break
 
             case Key.ESC:
-                dispatch(flowsActions.select(null))
+                if(getState().ui.modal.activeModal){
+                    dispatch(modalActions.hideModal())
+                } else {
+                    dispatch(flowsActions.select(null))
+                }
                 break
 
             case Key.LEFT: {

@@ -1,5 +1,6 @@
 import re
 import urllib
+from typing import Optional, AnyStr, Dict, Iterable, Tuple, Union
 
 from mitmproxy.types import multidict
 from mitmproxy.utils import strutils
@@ -75,6 +76,53 @@ class Request(message.Message):
         return "Request({} {}{})".format(
             self.method, hostport, path
         )
+
+    @classmethod
+    def make(
+            cls,
+            method: str,
+            url: str,
+            content: Union[bytes, str] = "",
+            headers: Union[Dict[str, AnyStr], Iterable[Tuple[bytes, bytes]]] = ()
+    ):
+        """
+        Simplified API for creating request objects.
+        """
+        req = cls(
+            "absolute",
+            method,
+            "",
+            "",
+            "",
+            "",
+            "HTTP/1.1",
+            (),
+            b""
+        )
+
+        req.url = url
+
+        # Headers can be list or dict, we differentiate here.
+        if isinstance(headers, dict):
+            req.headers = nheaders.Headers(**headers)
+        elif isinstance(headers, Iterable):
+            req.headers = nheaders.Headers(headers)
+        else:
+            raise TypeError("Expected headers to be an iterable or dict, but is {}.".format(
+                type(headers).__name__
+            ))
+
+        # Assign this manually to update the content-length header.
+        if isinstance(content, bytes):
+            req.content = content
+        elif isinstance(content, str):
+            req.text = content
+        else:
+            raise TypeError("Expected content to be str or bytes, but is {}.".format(
+                type(content).__name__
+            ))
+
+        return req
 
     def replace(self, pattern, repl, flags=0, count=0):
         """
@@ -164,11 +212,44 @@ class Request(message.Message):
         self.data.host = host
 
         # Update host header
-        if "host" in self.headers:
-            if host:
-                self.headers["host"] = host
+        if self.host_header is not None:
+            self.host_header = host
+
+    @property
+    def host_header(self) -> Optional[str]:
+        """
+        The request's host/authority header.
+
+        This property maps to either ``request.headers["Host"]`` or
+        ``request.headers[":authority"]``, depending on whether it's HTTP/1.x or HTTP/2.0.
+        """
+        if ":authority" in self.headers:
+            return self.headers[":authority"]
+        if "Host" in self.headers:
+            return self.headers["Host"]
+        return None
+
+    @host_header.setter
+    def host_header(self, val: Optional[str]) -> None:
+        if val is None:
+            self.headers.pop("Host", None)
+            self.headers.pop(":authority", None)
+        elif self.host_header is not None:
+            # Update any existing headers.
+            if ":authority" in self.headers:
+                self.headers[":authority"] = val
+            if "Host" in self.headers:
+                self.headers["Host"] = val
+        else:
+            # Only add the correct new header.
+            if self.http_version.upper().startswith("HTTP/2"):
+                self.headers[":authority"] = val
             else:
-                self.headers.pop("host")
+                self.headers["Host"] = val
+
+    @host_header.deleter
+    def host_header(self):
+        self.host_header = None
 
     @property
     def port(self):
@@ -211,9 +292,10 @@ class Request(message.Message):
 
     def _parse_host_header(self):
         """Extract the host and port from Host header"""
-        if "host" not in self.headers:
+        host = self.host_header
+        if not host:
             return None, None
-        host, port = self.headers["host"], None
+        port = None
         m = host_header_re.match(host)
         if m:
             host = m.group("host").strip("[]")
@@ -245,6 +327,15 @@ class Request(message.Message):
             return "%s:%d" % (self.pretty_host, self.port)
         return mitmproxy.net.http.url.unparse(self.scheme, self.pretty_host, self.port, self.path)
 
+    def _get_query(self):
+        query = urllib.parse.urlparse(self.url).query
+        return tuple(mitmproxy.net.http.url.decode(query))
+
+    def _set_query(self, query_data):
+        query = mitmproxy.net.http.url.encode(query_data)
+        _, _, path, params, _, fragment = urllib.parse.urlparse(self.url)
+        self.path = urllib.parse.urlunparse(["", "", path, params, query, fragment])
+
     @property
     def query(self) -> multidict.MultiDictView:
         """
@@ -255,18 +346,16 @@ class Request(message.Message):
             self._set_query
         )
 
-    def _get_query(self):
-        query = urllib.parse.urlparse(self.url).query
-        return tuple(mitmproxy.net.http.url.decode(query))
-
-    def _set_query(self, query_data):
-        query = mitmproxy.net.http.url.encode(query_data)
-        _, _, path, params, _, fragment = urllib.parse.urlparse(self.url)
-        self.path = urllib.parse.urlunparse(["", "", path, params, query, fragment])
-
     @query.setter
     def query(self, value):
         self._set_query(value)
+
+    def _get_cookies(self):
+        h = self.headers.get_all("Cookie")
+        return tuple(cookies.parse_cookie_headers(h))
+
+    def _set_cookies(self, value):
+        self.headers["cookie"] = cookies.format_cookie_header(value)
 
     @property
     def cookies(self) -> multidict.MultiDictView:
@@ -279,13 +368,6 @@ class Request(message.Message):
             self._get_cookies,
             self._set_cookies
         )
-
-    def _get_cookies(self):
-        h = self.headers.get_all("Cookie")
-        return tuple(cookies.parse_cookie_headers(h))
-
-    def _set_cookies(self, value):
-        self.headers["cookie"] = cookies.format_cookie_header(value)
 
     @cookies.setter
     def cookies(self, value):
@@ -344,20 +426,6 @@ class Request(message.Message):
                 )
             )
 
-    @property
-    def urlencoded_form(self):
-        """
-        The URL-encoded form data as an :py:class:`~mitmproxy.net.multidict.MultiDictView` object.
-        An empty multidict.MultiDictView if the content-type indicates non-form data
-        or the content could not be parsed.
-
-        Starting with mitmproxy 1.0, key and value are strings.
-        """
-        return multidict.MultiDictView(
-            self._get_urlencoded_form,
-            self._set_urlencoded_form
-        )
-
     def _get_urlencoded_form(self):
         is_valid_content_type = "application/x-www-form-urlencoded" in self.headers.get("content-type", "").lower()
         if is_valid_content_type:
@@ -373,11 +441,37 @@ class Request(message.Message):
         This will overwrite the existing content if there is one.
         """
         self.headers["content-type"] = "application/x-www-form-urlencoded"
-        self.content = mitmproxy.net.http.url.encode(form_data).encode()
+        self.content = mitmproxy.net.http.url.encode(form_data, self.content.decode()).encode()
+
+    @property
+    def urlencoded_form(self):
+        """
+        The URL-encoded form data as an :py:class:`~mitmproxy.net.multidict.MultiDictView` object.
+        An empty multidict.MultiDictView if the content-type indicates non-form data
+        or the content could not be parsed.
+
+        Starting with mitmproxy 1.0, key and value are strings.
+        """
+        return multidict.MultiDictView(
+            self._get_urlencoded_form,
+            self._set_urlencoded_form
+        )
 
     @urlencoded_form.setter
     def urlencoded_form(self, value):
         self._set_urlencoded_form(value)
+
+    def _get_multipart_form(self):
+        is_valid_content_type = "multipart/form-data" in self.headers.get("content-type", "").lower()
+        if is_valid_content_type:
+            try:
+                return multipart.decode(self.headers, self.content)
+            except ValueError:
+                pass
+        return ()
+
+    def _set_multipart_form(self, value):
+        raise NotImplementedError()
 
     @property
     def multipart_form(self):
@@ -392,18 +486,6 @@ class Request(message.Message):
             self._get_multipart_form,
             self._set_multipart_form
         )
-
-    def _get_multipart_form(self):
-        is_valid_content_type = "multipart/form-data" in self.headers.get("content-type", "").lower()
-        if is_valid_content_type:
-            try:
-                return multipart.decode(self.headers, self.content)
-            except ValueError:
-                pass
-        return ()
-
-    def _set_multipart_form(self, value):
-        raise NotImplementedError()
 
     @multipart_form.setter
     def multipart_form(self, value):

@@ -13,7 +13,7 @@ import logging
 
 from mitmproxy import certs
 from mitmproxy import exceptions
-from mitmproxy.net import tcp
+from mitmproxy.net import tcp, tls
 from mitmproxy.net import websockets
 from mitmproxy.net import socks
 from mitmproxy.net import http as net_http
@@ -158,8 +158,8 @@ class Pathoc(tcp.TCPClient):
             # SSL
             ssl=None,
             sni=None,
-            ssl_version=tcp.SSL_DEFAULT_METHOD,
-            ssl_options=tcp.SSL_DEFAULT_OPTIONS,
+            ssl_version=tls.DEFAULT_METHOD,
+            ssl_options=tls.DEFAULT_OPTIONS,
             clientcert=None,
             ciphers=None,
 
@@ -223,14 +223,6 @@ class Pathoc(tcp.TCPClient):
         self.ws_framereader = None
 
         if self.use_http2:
-            if not tcp.HAS_ALPN:  # pragma: no cover
-                log.write_raw(
-                    self.fp,
-                    "HTTP/2 requires ALPN support. "
-                    "Please use OpenSSL >= 1.0.2. "
-                    "Pathoc might not be working as expected without ALPN.",
-                    timestamp=False
-                )
             self.protocol = http2.HTTP2StateProtocol(self, dump_frames=self.http2_framedump)
         else:
             self.protocol = net_http.http1
@@ -239,7 +231,7 @@ class Pathoc(tcp.TCPClient):
             is_client=True,
             staticdir=os.getcwd(),
             unconstrained_file_access=True,
-            request_host=self.address.host,
+            request_host=self.address[0],
             protocol=self.protocol,
         )
 
@@ -286,7 +278,7 @@ class Pathoc(tcp.TCPClient):
                 socks.VERSION.SOCKS5,
                 socks.CMD.CONNECT,
                 socks.ATYP.DOMAINNAME,
-                tcp.Address.wrap(connect_to)
+                connect_to,
             )
             connect_request.to_file(self.wfile)
             self.wfile.flush()

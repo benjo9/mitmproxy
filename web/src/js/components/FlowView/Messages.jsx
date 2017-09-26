@@ -1,4 +1,5 @@
-import React, { Component, PropTypes } from 'react'
+import React, { Component } from 'react'
+import PropTypes from 'prop-types'
 import { connect } from 'react-redux'
 
 
@@ -8,6 +9,7 @@ import ContentView from '../ContentView'
 import ContentViewOptions from '../ContentView/ContentViewOptions'
 import ValidateEditor from '../ValueEditor/ValidateEditor'
 import ValueEditor from '../ValueEditor/ValueEditor'
+import HideInStatic from '../common/HideInStatic'
 
 import Headers from './Headers'
 import { startEdit, updateEdit } from '../../ducks/ui/flow'
@@ -104,6 +106,7 @@ export class Request extends Component {
                         onContentChange={content => updateFlow({ request: {content}})}
                         message={flow.request}/>
                 </article>
+                <HideInStatic>
                 {!noContent &&
                     <footer>
                         <ContentViewOptions
@@ -113,6 +116,7 @@ export class Request extends Component {
                             uploadContent={content => uploadContent(flow, content, "request")}/>
                     </footer>
                 }
+                </HideInStatic>
             </section>
         )
     }
@@ -171,6 +175,7 @@ export class Response extends Component {
                         message={flow.response}
                     />
                 </article>
+                <HideInStatic>
                 {!noContent &&
                     <footer >
                         <ContentViewOptions
@@ -180,6 +185,7 @@ export class Response extends Component {
                             readonly={!isEdit}/>
                     </footer>
                 }
+                </HideInStatic>
             </section>
         )
     }

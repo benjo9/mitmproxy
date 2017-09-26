@@ -1,3 +1,6 @@
+import io
+import uuid
+
 from mitmproxy.net import websockets
 from mitmproxy.test import tutils
 from mitmproxy import tcp
@@ -68,11 +71,13 @@ def twebsocketflow(client_conn=True, server_conn=True, messages=True, err=None, 
         handshake_flow.response = resp
 
     f = websocket.WebSocketFlow(client_conn, server_conn, handshake_flow)
+    handshake_flow.metadata['websocket_flow'] = f
 
     if messages is True:
         messages = [
             websocket.WebSocketMessage(websockets.OPCODE.BINARY, True, b"hello binary"),
-            websocket.WebSocketMessage(websockets.OPCODE.TEXT, False, "hello text".encode()),
+            websocket.WebSocketMessage(websockets.OPCODE.TEXT, True, "hello text".encode()),
+            websocket.WebSocketMessage(websockets.OPCODE.TEXT, False, "it's me".encode()),
         ]
     if err is True:
         err = terr()
@@ -142,8 +147,10 @@ def tclient_conn():
     @return: mitmproxy.proxy.connection.ClientConnection
     """
     c = connections.ClientConnection.from_state(dict(
-        address=dict(address=("address", 22), use_ipv6=True),
+        id=str(uuid.uuid4()),
+        address=("127.0.0.1", 22),
         clientcert=None,
+        mitmcert=None,
         ssl_established=False,
         timestamp_start=1,
         timestamp_ssl_setup=2,
@@ -154,6 +161,8 @@ def tclient_conn():
         tls_version="TLSv1.2",
     ))
     c.reply = controller.DummyReply()
+    c.rfile = io.BytesIO()
+    c.wfile = io.BytesIO()
     return c
 
 
@@ -162,9 +171,10 @@ def tserver_conn():
     @return: mitmproxy.proxy.connection.ServerConnection
     """
     c = connections.ServerConnection.from_state(dict(
-        address=dict(address=("address", 22), use_ipv6=True),
-        source_address=dict(address=("address", 22), use_ipv6=True),
-        ip_address=None,
+        id=str(uuid.uuid4()),
+        address=("address", 22),
+        source_address=("address", 22),
+        ip_address=("192.168.0.1", 22),
         cert=None,
         timestamp_start=1,
         timestamp_tcp_setup=2,
@@ -173,9 +183,12 @@ def tserver_conn():
         ssl_established=False,
         sni="address",
         alpn_proto_negotiated=None,
+        tls_version="TLSv1.2",
         via=None,
     ))
     c.reply = controller.DummyReply()
+    c.rfile = io.BytesIO()
+    c.wfile = io.BytesIO()
     return c
 
 

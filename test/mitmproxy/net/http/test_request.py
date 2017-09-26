@@ -1,7 +1,7 @@
 from unittest import mock
 import pytest
 
-from mitmproxy.net.http import Headers
+from mitmproxy.net.http import Headers, Request
 from mitmproxy.test.tutils import treq
 from .test_message import _test_decoded_attr, _test_passthrough_attr
 
@@ -34,6 +34,32 @@ class TestRequestCore:
         assert repr(request) == "Request(GET address:22/path)"
         request.host = None
         assert repr(request) == "Request(GET /path)"
+
+    def test_make(self):
+        r = Request.make("GET", "https://example.com/")
+        assert r.method == "GET"
+        assert r.scheme == "https"
+        assert r.host == "example.com"
+        assert r.port == 443
+        assert r.path == "/"
+
+        r = Request.make("GET", "https://example.com/", "content", {"Foo": "bar"})
+        assert r.content == b"content"
+        assert r.headers["content-length"] == "7"
+        assert r.headers["Foo"] == "bar"
+
+        Request.make("GET", "https://example.com/", content=b"content")
+        with pytest.raises(TypeError):
+            Request.make("GET", "https://example.com/", content=42)
+
+        r = Request.make("GET", "https://example.com/", headers=[(b"foo", b"bar")])
+        assert r.headers["foo"] == "bar"
+
+        r = Request.make("GET", "https://example.com/", headers=({"foo": "baz"}))
+        assert r.headers["foo"] == "baz"
+
+        with pytest.raises(TypeError):
+            Request.make("GET", "https://example.com/", headers=42)
 
     def test_replace(self):
         r = treq()
@@ -97,7 +123,7 @@ class TestRequestCore:
         request.host = d
         assert request.data.host == b"foo\xFF\x00bar"
 
-    def test_host_header_update(self):
+    def test_host_update_also_updates_header(self):
         request = treq()
         assert "host" not in request.headers
         request.host = "example.com"
@@ -106,6 +132,51 @@ class TestRequestCore:
         request.headers["Host"] = "foo"
         request.host = "example.org"
         assert request.headers["Host"] == "example.org"
+
+    def test_get_host_header(self):
+        no_hdr = treq()
+        assert no_hdr.host_header is None
+
+        h1 = treq(headers=(
+            (b"host", b"example.com"),
+        ))
+        assert h1.host_header == "example.com"
+
+        h2 = treq(headers=(
+            (b":authority", b"example.org"),
+        ))
+        assert h2.host_header == "example.org"
+
+        both_hdrs = treq(headers=(
+            (b"host", b"example.org"),
+            (b":authority", b"example.com"),
+        ))
+        assert both_hdrs.host_header == "example.com"
+
+    def test_modify_host_header(self):
+        h1 = treq()
+        assert "host" not in h1.headers
+        assert ":authority" not in h1.headers
+        h1.host_header = "example.com"
+        assert "host" in h1.headers
+        assert ":authority" not in h1.headers
+        h1.host_header = None
+        assert "host" not in h1.headers
+
+        h2 = treq(http_version=b"HTTP/2.0")
+        h2.host_header = "example.org"
+        assert "host" not in h2.headers
+        assert ":authority" in h2.headers
+        del h2.host_header
+        assert ":authority" not in h2.headers
+
+        both_hdrs = treq(headers=(
+            (b":authority", b"example.com"),
+            (b"host", b"example.org"),
+        ))
+        both_hdrs.host_header = "foo.example.com"
+        assert both_hdrs.headers["Host"] == "foo.example.com"
+        assert both_hdrs.headers[":authority"] == "foo.example.com"
 
 
 class TestRequestUtils:

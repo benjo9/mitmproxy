@@ -93,9 +93,9 @@ def dummy_cert(privkey, cacert, commonname, sans):
         try:
             ipaddress.ip_address(i.decode("ascii"))
         except ValueError:
-            ss.append(b"DNS: %s" % i)
+            ss.append(b"DNS:%s" % i)
         else:
-            ss.append(b"IP: %s" % i)
+            ss.append(b"IP:%s" % i)
     ss = b", ".join(ss)
 
     cert = OpenSSL.crypto.X509()
@@ -266,6 +266,12 @@ class CertStore:
         with open(os.path.join(path, basename + "-ca-cert.p12"), "wb") as f:
             p12 = OpenSSL.crypto.PKCS12()
             p12.set_certificate(ca)
+            f.write(p12.export())
+
+        # Dump the certificate and key in a PKCS12 format for Windows devices
+        with open(os.path.join(path, basename + "-ca.p12"), "wb") as f:
+            p12 = OpenSSL.crypto.PKCS12()
+            p12.set_certificate(ca)
             p12.set_privatekey(key)
             f.write(p12.export())
 
@@ -356,14 +362,14 @@ class CertStore:
 
 
 class _GeneralName(univ.Choice):
-    # We are only interested in dNSNames. We use a default handler to ignore
-    # other types.
-    # TODO: We should also handle iPAddresses.
+    # We only care about dNSName and iPAddress
     componentType = namedtype.NamedTypes(
         namedtype.NamedType('dNSName', char.IA5String().subtype(
             implicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatSimple, 2)
-        )
-        ),
+        )),
+        namedtype.NamedType('iPAddress', univ.OctetString().subtype(
+            implicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatSimple, 7)
+        )),
     )
 
 
@@ -383,9 +389,6 @@ class SSLCert(serializable.Serializable):
 
     def __eq__(self, other):
         return self.digest("sha256") == other.digest("sha256")
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
 
     def get_state(self):
         return self.to_pem()
@@ -477,5 +480,8 @@ class SSLCert(serializable.Serializable):
                 except PyAsn1Error:
                     continue
                 for i in dec[0]:
-                    altnames.append(i[0].asOctets())
+                    if i[0].hasValue():
+                        e = i[0].asOctets()
+                        altnames.append(e)
+
         return altnames

@@ -2,36 +2,35 @@ import os.path
 import threading
 import tempfile
 import sys
+from unittest import mock
 
 import mitmproxy.platform
 from mitmproxy.proxy.config import ProxyConfig
 from mitmproxy.proxy.server import ProxyServer
-from mitmproxy import master
 from mitmproxy import controller
 from mitmproxy import options
 from mitmproxy import exceptions
 from mitmproxy import io
-from mitmproxy import http
 import pathod.test
 import pathod.pathoc
 
+from mitmproxy import eventsequence
 from mitmproxy.test import tflow
 from mitmproxy.test import tutils
+from mitmproxy.test import taddons
 
 
 class MasterTest:
 
     def cycle(self, master, content):
         f = tflow.tflow(req=tutils.treq(content=content))
-        master.clientconnect(f.client_conn)
-        master.serverconnect(f.server_conn)
-        master.request(f)
-        if not f.error:
-            f.response = http.HTTPResponse.wrap(
-                tutils.tresp(content=content)
-            )
-            master.response(f)
-        master.clientdisconnect(f)
+        layer = mock.Mock("mitmproxy.proxy.protocol.base.Layer")
+        layer.client_conn = f.client_conn
+        layer.reply = controller.DummyReply()
+        master.addons.handle_lifecycle("clientconnect", layer)
+        for i in eventsequence.iterate(f):
+            master.addons.handle_lifecycle(*i)
+        master.addons.handle_lifecycle("clientdisconnect", layer)
         return f
 
     def dummy_cycle(self, master, n, content):
@@ -68,28 +67,24 @@ class TestState:
     #         self.flows.append(f)
 
 
-class TestMaster(master.Master):
+class TestMaster(taddons.RecordingMaster):
 
-    def __init__(self, opts, config):
-        s = ProxyServer(config)
-        master.Master.__init__(self, opts, s)
+    def __init__(self, opts):
+        super().__init__(opts)
+        config = ProxyConfig(opts)
+        self.server = ProxyServer(config)
 
     def clear_addons(self, addons):
         self.addons.clear()
         self.state = TestState()
         self.addons.add(self.state)
         self.addons.add(*addons)
-
-    def clear_log(self):
-        self.tlog = []
+        self.addons.trigger("configure", self.options.keys())
+        self.addons.trigger("running")
 
     def reset(self, addons):
         self.clear_addons(addons)
-        self.clear_log()
-
-    @controller.handler
-    def log(self, e):
-        self.tlog.append(e.msg)
+        self.clear()
 
 
 class ProxyThread(threading.Thread):
@@ -98,17 +93,18 @@ class ProxyThread(threading.Thread):
         threading.Thread.__init__(self)
         self.tmaster = tmaster
         self.name = "ProxyThread (%s:%s)" % (
-            tmaster.server.address.host, tmaster.server.address.port
+            tmaster.server.address[0],
+            tmaster.server.address[1],
         )
         controller.should_exit = False
 
     @property
     def port(self):
-        return self.tmaster.server.address.port
+        return self.tmaster.server.address[1]
 
     @property
     def tlog(self):
-        return self.tmaster.tlog
+        return self.tmaster.logs
 
     def run(self):
         self.tmaster.run()
@@ -134,15 +130,14 @@ class ProxyTestBase:
             ssl=cls.ssl,
             ssloptions=cls.ssloptions)
 
-        opts = cls.get_options()
-        cls.config = ProxyConfig(opts)
-        tmaster = cls.masterclass(opts, cls.config)
+        cls.options = cls.get_options()
+        tmaster = cls.masterclass(cls.options)
         cls.proxy = ProxyThread(tmaster)
         cls.proxy.start()
 
     @classmethod
     def teardown_class(cls):
-        # perf: we want to run tests in parallell
+        # perf: we want to run tests in parallel
         # should this ever cause an error, travis should catch it.
         # shutil.rmtree(cls.cadir)
         cls.proxy.shutdown()
@@ -287,7 +282,7 @@ class ReverseProxyTest(ProxyTestBase):
     @classmethod
     def get_options(cls):
         opts = ProxyTestBase.get_options()
-        opts.upstream_server = "".join(
+        s = "".join(
             [
                 "https" if cls.ssl else "http",
                 "://",
@@ -295,7 +290,7 @@ class ReverseProxyTest(ProxyTestBase):
                 str(cls.server.port)
             ]
         )
-        opts.mode = "reverse"
+        opts.mode = "reverse:" + s
         return opts
 
     def pathoc(self, sni=None):
@@ -343,19 +338,16 @@ class ChainProxyTest(ProxyTestBase):
 
     @classmethod
     def setup_class(cls):
+        # We need to initialize the chain first so that the normal server gets a correct config.
         cls.chain = []
-        super().setup_class()
         for _ in range(cls.n):
             opts = cls.get_options()
-            config = ProxyConfig(opts)
-            tmaster = cls.masterclass(opts, config)
+            tmaster = cls.masterclass(opts)
             proxy = ProxyThread(tmaster)
             proxy.start()
             cls.chain.insert(0, proxy)
 
-        # Patch the orginal proxy to upstream mode
-        opts = cls.get_options()
-        cls.config = cls.proxy.tmaster.config = cls.proxy.tmaster.server.config = ProxyConfig(opts)
+        super().setup_class()
 
     @classmethod
     def teardown_class(cls):
@@ -372,9 +364,9 @@ class ChainProxyTest(ProxyTestBase):
     def get_options(cls):
         opts = super().get_options()
         if cls.chain:  # First proxy is in normal mode.
+            s = "http://127.0.0.1:%s" % cls.chain[0].port
             opts.update(
-                mode="upstream",
-                upstream_server="http://127.0.0.1:%s" % cls.chain[0].port
+                mode="upstream:" + s,
             )
         return opts
 

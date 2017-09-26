@@ -1,4 +1,5 @@
-import { PropTypes } from 'react'
+import React from 'react'
+import PropTypes from 'prop-types'
 import FileChooser from '../common/FileChooser'
 
 UploadContentButton.propTypes = {
@@ -6,7 +7,7 @@ UploadContentButton.propTypes = {
 }
 
 export default function UploadContentButton({ uploadContent }) {
-    
+
     return (
         <FileChooser
             icon="fa-upload"

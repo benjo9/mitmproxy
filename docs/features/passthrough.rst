@@ -16,14 +16,14 @@ mechanism:
 If you want to peek into (SSL-protected) non-HTTP connections, check out the :ref:`tcpproxy`
 feature.
 If you want to ignore traffic from mitmproxy's processing because of large response bodies,
-take a look at the :ref:`responsestreaming` feature.
+take a look at the :ref:`streaming` feature.
 
 How it works
 ------------
 
 ================== ======================
 command-line       ``--ignore regex``
-mitmproxy shortcut :kbd:`o` then :kbd:`I`
+mitmproxy shortcut :kbd:`O` then :kbd:`I`
 ================== ======================
 
 
@@ -89,7 +89,7 @@ Here are some other examples for ignore patterns:
 .. seealso::
 
     - :ref:`tcpproxy`
-    - :ref:`responsestreaming`
+    - :ref:`streaming`
     - mitmproxy's "Limit" feature
 
 .. rubric:: Footnotes

@@ -6,6 +6,7 @@ from kaitaistruct import KaitaiStream
 from mitmproxy.contrib.kaitaistruct import png
 from mitmproxy.contrib.kaitaistruct import gif
 from mitmproxy.contrib.kaitaistruct import jpeg
+from mitmproxy.contrib.kaitaistruct import ico
 
 Metadata = typing.List[typing.Tuple[str, str]]
 
@@ -13,9 +14,9 @@ Metadata = typing.List[typing.Tuple[str, str]]
 def parse_png(data: bytes) -> Metadata:
     img = png.Png(KaitaiStream(io.BytesIO(data)))
     parts = [
-        ('Format', 'Portable network graphics')
+        ('Format', 'Portable network graphics'),
+        ('Size', "{0} x {1} px".format(img.ihdr.width, img.ihdr.height))
     ]
-    parts.append(('Size', "{0} x {1} px".format(img.ihdr.width, img.ihdr.height)))
     for chunk in img.chunks:
         if chunk.type == 'gAMA':
             parts.append(('gamma', str(chunk.body.gamma_int / 100000)))
@@ -34,13 +35,13 @@ def parse_png(data: bytes) -> Metadata:
 
 def parse_gif(data: bytes) -> Metadata:
     img = gif.Gif(KaitaiStream(io.BytesIO(data)))
-    parts = [
-        ('Format', 'Compuserve GIF')
-    ]
-    parts.append(('version', "GIF{0}".format(img.header.version.decode('ASCII'))))
     descriptor = img.logical_screen_descriptor
-    parts.append(('Size', "{0} x {1} px".format(descriptor.screen_width, descriptor.screen_height)))
-    parts.append(('background', str(descriptor.bg_color_index)))
+    parts = [
+        ('Format', 'Compuserve GIF'),
+        ('Version', "GIF{}".format(img.hdr.version)),
+        ('Size', "{} x {} px".format(descriptor.screen_width, descriptor.screen_height)),
+        ('background', str(descriptor.bg_color_index))
+    ]
     ext_blocks = []
     for block in img.blocks:
         if block.block_type.name == 'extension':
@@ -77,4 +78,26 @@ def parse_jpeg(data: bytes) -> Metadata:
                 for field in segment.data.body.data.body.ifd0.fields:
                     if field.data is not None:
                         parts.append((field.tag._name_, field.data.decode('UTF-8').strip('\x00')))
+    return parts
+
+
+def parse_ico(data: bytes) -> Metadata:
+    img = ico.Ico(KaitaiStream(io.BytesIO(data)))
+    parts = [
+        ('Format', 'ICO'),
+        ('Number of images', str(img.num_images)),
+    ]
+
+    for i, image in enumerate(img.images):
+        parts.append(
+            (
+                'Image {}'.format(i + 1), "Size: {} x {}\n"
+                                          "{: >18}Bits per pixel: {}\n"
+                                          "{: >18}PNG: {}".format(256 if not image.width else image.width,
+                                                                  256 if not image.height else image.height,
+                                                                  '', image.bpp,
+                                                                  '', image.is_png)
+            )
+        )
+
     return parts

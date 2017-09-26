@@ -1,8 +1,10 @@
-import React, { PropTypes } from "react"
+import React  from "react"
+import PropTypes from 'prop-types'
 import { connect } from "react-redux"
 import Button from "../common/Button"
 import { MessageUtils } from "../../flow/utils.js"
 import * as flowsActions from "../../ducks/flows"
+import HideInStatic from "../common/HideInStatic";
 
 FlowMenu.title = 'Flow'
 
@@ -16,11 +18,12 @@ FlowMenu.propTypes = {
     revertFlow: PropTypes.func.isRequired
 }
 
-function FlowMenu({ flow, resumeFlow, killFlow, replayFlow, duplicateFlow, removeFlow, revertFlow }) {
+export function FlowMenu({ flow, resumeFlow, killFlow, replayFlow, duplicateFlow, removeFlow, revertFlow }) {
     if (!flow)
         return <div/>
     return (
         <div>
+            <HideInStatic>
             <div className="menu-group">
                 <div className="menu-content">
                     <Button title="[r]eplay flow" icon="fa-repeat text-primary"
@@ -42,6 +45,8 @@ function FlowMenu({ flow, resumeFlow, killFlow, replayFlow, duplicateFlow, remov
                 </div>
                 <div className="menu-legend">Flow Modification</div>
             </div>
+            </HideInStatic>
+
             <div className="menu-group">
                 <div className="menu-content">
                     <Button title="download" icon="fa-download"
@@ -51,6 +56,8 @@ function FlowMenu({ flow, resumeFlow, killFlow, replayFlow, duplicateFlow, remov
                 </div>
                 <div className="menu-legend">Export</div>
             </div>
+
+            <HideInStatic>
             <div className="menu-group">
                 <div className="menu-content">
                     <Button disabled={!flow || !flow.intercepted} title="[a]ccept intercepted flow"
@@ -64,6 +71,7 @@ function FlowMenu({ flow, resumeFlow, killFlow, replayFlow, duplicateFlow, remov
                 </div>
                 <div className="menu-legend">Interception</div>
             </div>
+            </HideInStatic>
 
 
         </div>

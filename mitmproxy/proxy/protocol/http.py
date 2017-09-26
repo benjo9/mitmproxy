@@ -8,7 +8,6 @@ from mitmproxy import http
 from mitmproxy import flow
 from mitmproxy.proxy.protocol import base
 from mitmproxy.proxy.protocol.websocket import WebSocketLayer
-from mitmproxy.net import tcp
 from mitmproxy.net import websockets
 
 
@@ -59,7 +58,7 @@ class ConnectServerConnection:
     """
 
     def __init__(self, address, ctx):
-        self.address = tcp.Address.wrap(address)
+        self.address = address
         self._ctx = ctx
 
     @property
@@ -112,9 +111,8 @@ class UpstreamConnectLayer(base.Layer):
     def set_server(self, address):
         if self.ctx.server_conn.connected():
             self.ctx.disconnect()
-        address = tcp.Address.wrap(address)
-        self.connect_request.host = address.host
-        self.connect_request.port = address.port
+        self.connect_request.host = address[0]
+        self.connect_request.port = address[1]
         self.server_conn.address = address
 
 
@@ -145,9 +143,11 @@ def validate_request_form(mode, request):
     if request.first_line_format not in allowed_request_forms:
         if mode == HTTPMode.transparent:
             err_message = (
-                "Mitmproxy received an {} request even though it is not running in regular mode. "
-                "This usually indicates a misconfiguration, please see "
-                "http://docs.mitmproxy.org/en/stable/modes.html for details."
+                """
+                Mitmproxy received an {} request even though it is not running
+                in regular mode. This usually indicates a misconfiguration,
+                please see the mitmproxy mode documentation for details.
+                """
             ).format("HTTP CONNECT" if request.first_line_format == "authority" else "absolute-form")
         else:
             err_message = "Invalid HTTP request form (expected: %s, got: %s)" % (
@@ -217,16 +217,19 @@ class HttpLayer(base.Layer):
         return False
 
     def handle_upstream_connect(self, f):
-        self.establish_server_connection(
-            f.request.host,
-            f.request.port,
-            f.request.scheme
-        )
-        self.send_request(f.request)
-        f.response = self.read_response_headers()
-        f.response.data.content = b"".join(
-            self.read_response_body(f.request, f.response)
-        )
+        # if the user specifies a response in the http_connect hook, we do not connect upstream here.
+        # https://github.com/mitmproxy/mitmproxy/pull/2473
+        if not f.response:
+            self.establish_server_connection(
+                f.request.host,
+                f.request.port,
+                f.request.scheme
+            )
+            self.send_request(f.request)
+            f.response = self.read_response_headers()
+            f.response.data.content = b"".join(
+                self.read_response_body(f.request, f.response)
+            )
         self.send_response(f.response)
         if is_ok(f.response.status_code):
             layer = UpstreamConnectLayer(self, f.request)
@@ -262,7 +265,10 @@ class HttpLayer(base.Layer):
                     self.send_error_response(400, msg)
                     raise exceptions.ProtocolException(msg)
 
+            validate_request_form(self.mode, request)
             self.channel.ask("requestheaders", f)
+            # Re-validate request form in case the user has changed something.
+            validate_request_form(self.mode, request)
 
             if request.headers.get("expect", "").lower() == "100-continue":
                 # TODO: We may have to use send_response_headers for HTTP2
@@ -270,14 +276,19 @@ class HttpLayer(base.Layer):
                 self.send_response(http.expect_continue_response)
                 request.headers.pop("expect")
 
-            request.data.content = b"".join(self.read_request_body(request))
+            if f.request.stream:
+                f.request.data.content = None
+            else:
+                f.request.data.content = b"".join(self.read_request_body(request))
             request.timestamp_end = time.time()
-
-            validate_request_form(self.mode, request)
         except exceptions.HttpException as e:
             # We optimistically guess there might be an HTTP client on the
             # other end
             self.send_error_response(400, repr(e))
+            # Request may be malformed at this point, so we unset it.
+            f.request = None
+            f.error = flow.Error(str(e))
+            self.channel.ask("error", f)
             raise exceptions.ProtocolException(
                 "HTTP protocol error in client request: {}".format(e)
             )
@@ -290,8 +301,8 @@ class HttpLayer(base.Layer):
             request.first_line_format = "relative"
 
         # update host header in reverse proxy mode
-        if self.config.options.mode == "reverse":
-            f.request.headers["Host"] = self.config.upstream_server.address.host
+        if self.config.options.mode.startswith("reverse:") and not self.config.options.keep_host_header:
+            f.request.host_header = self.config.upstream_server.address[0]
 
         # Determine .scheme, .host and .port attributes for inline scripts. For
         # absolute-form requests, they are directly given in the request. For
@@ -301,11 +312,10 @@ class HttpLayer(base.Layer):
         if self.mode is HTTPMode.transparent:
             # Setting request.host also updates the host header, which we want
             # to preserve
-            host_header = f.request.headers.get("host", None)
-            f.request.host = self.__initial_server_conn.address.host
-            f.request.port = self.__initial_server_conn.address.port
-            if host_header:
-                f.request.headers["host"] = host_header
+            host_header = f.request.host_header
+            f.request.host = self.__initial_server_conn.address[0]
+            f.request.port = self.__initial_server_conn.address[1]
+            f.request.host_header = host_header  # set again as .host overwrites this.
             f.request.scheme = "https" if self.__initial_server_tls else "http"
         self.channel.ask("request", f)
 
@@ -322,12 +332,8 @@ class HttpLayer(base.Layer):
                     f.request.scheme
                 )
 
-                def get_response():
-                    self.send_request(f.request)
-                    f.response = self.read_response_headers()
-
                 try:
-                    get_response()
+                    self.send_request_headers(f.request)
                 except exceptions.NetlibException as e:
                     self.log(
                         "server communication error: %s" % repr(e),
@@ -353,7 +359,19 @@ class HttpLayer(base.Layer):
 
                     self.disconnect()
                     self.connect()
-                    get_response()
+                    self.send_request_headers(f.request)
+
+                # This is taken out of the try except block because when streaming
+                # we can't send the request body while retrying as the generator gets exhausted
+                if f.request.stream:
+                    chunks = self.read_request_body(f.request)
+                    if callable(f.request.stream):
+                        chunks = f.request.stream(chunks)
+                    self.send_request_body(f.request, chunks)
+                else:
+                    self.send_request_body(f.request, [f.request.data.content])
+
+                f.response = self.read_response_headers()
 
                 # call the appropriate script hook - this is an opportunity for
                 # an inline script to set f.stream = True
@@ -454,14 +472,14 @@ class HttpLayer(base.Layer):
             self.set_server(address)
 
     def establish_server_connection(self, host: str, port: int, scheme: str):
-        address = tcp.Address((host, port))
         tls = (scheme == "https")
 
         if self.mode is HTTPMode.regular or self.mode is HTTPMode.transparent:
             # If there's an existing connection that doesn't match our expectations, kill it.
+            address = (host, port)
             if address != self.server_conn.address or tls != self.server_tls:
                 self.set_server(address)
-                self.set_server_tls(tls, address.host)
+                self.set_server_tls(tls, address[0])
             # Establish connection is neccessary.
             if not self.server_conn.connected():
                 self.connect()

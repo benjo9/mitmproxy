@@ -68,10 +68,18 @@ class RootContext:
                 top_layer,
                 client_tls,
                 top_layer.server_tls,
-                top_layer.server_conn.address.host
+                top_layer.server_conn.address[0]
             )
-        if isinstance(top_layer, protocol.ServerConnectionMixin) or isinstance(top_layer, protocol.UpstreamConnectLayer):
+        if isinstance(top_layer, protocol.ServerConnectionMixin):
             return protocol.TlsLayer(top_layer, client_tls, client_tls)
+        if isinstance(top_layer, protocol.UpstreamConnectLayer):
+            # if the user manually sets a scheme for connect requests, we use this to decide if we
+            # want TLS or not.
+            if top_layer.connect_request.scheme:
+                tls = top_layer.connect_request.scheme == "https"
+            else:
+                tls = client_tls
+            return protocol.TlsLayer(top_layer, client_tls, tls)
 
         # 3. In Http Proxy mode and Upstream Proxy mode, the next layer is fixed.
         if isinstance(top_layer, protocol.TlsLayer):
@@ -96,7 +104,16 @@ class RootContext:
             if alpn == b'http/1.1':
                 return protocol.Http1Layer(top_layer, http.HTTPMode.transparent)
 
-        # 6. Assume HTTP1 by default
+        # 6. Check for raw tcp mode
+        is_ascii = (
+            len(d) == 3 and
+            # expect A-Za-z
+            all(65 <= x <= 90 or 97 <= x <= 122 for x in d)
+        )
+        if self.config.options.rawtcp and not is_ascii:
+            return protocol.RawTCPLayer(top_layer)
+
+        # 7. Assume HTTP1 by default
         return protocol.Http1Layer(top_layer, http.HTTPMode.transparent)
 
     def log(self, msg, level, subs=()):
@@ -104,7 +121,7 @@ class RootContext:
         Send a log message to the master.
         """
         full_msg = [
-            "{}: {}".format(repr(self.client_conn.address), msg)
+            "{}:{}: {}".format(self.client_conn.address[0], self.client_conn.address[1], msg)
         ]
         for i in subs:
             full_msg.append("  -> " + i)

@@ -1,35 +1,45 @@
 import binascii
+import weakref
+import ldap3
+from typing import Optional
+from typing import MutableMapping  # noqa
+from typing import Tuple
 
 import passlib.apache
 
+import mitmproxy.net.http
+from mitmproxy import connections  # noqa
 from mitmproxy import exceptions
 from mitmproxy import http
-import mitmproxy.net.http
-
+from mitmproxy import ctx
+from mitmproxy.net.http import status_codes
 
 REALM = "mitmproxy"
 
 
-def mkauth(username, password, scheme="basic"):
+def mkauth(username: str, password: str, scheme: str = "basic") -> str:
+    """
+    Craft a basic auth string
+    """
     v = binascii.b2a_base64(
         (username + ":" + password).encode("utf8")
     ).decode("ascii")
     return scheme + " " + v
 
 
-def parse_http_basic_auth(s):
-    words = s.split()
-    if len(words) != 2:
-        return None
-    scheme = words[0]
+def parse_http_basic_auth(s: str) -> Tuple[str, str, str]:
+    """
+    Parse a basic auth header.
+    Raises a ValueError if the input is invalid.
+    """
+    scheme, authinfo = s.split()
+    if scheme.lower() != "basic":
+        raise ValueError("Unknown scheme")
     try:
-        user = binascii.a2b_base64(words[1]).decode("utf8", "replace")
-    except binascii.Error:
-        return None
-    parts = user.split(':')
-    if len(parts) != 2:
-        return None
-    return scheme, parts[0], parts[1]
+        user, password = binascii.a2b_base64(authinfo.encode()).decode("utf8", "replace").split(":")
+    except binascii.Error as e:
+        raise ValueError(str(e))
+    return scheme, user, password
 
 
 class ProxyAuth:
@@ -37,112 +47,156 @@ class ProxyAuth:
         self.nonanonymous = False
         self.htpasswd = None
         self.singleuser = None
+        self.ldapconn = None
+        self.ldapserver = None
+        self.authenticated = weakref.WeakKeyDictionary()  # type: MutableMapping[connections.ClientConnection, Tuple[str, str]]
+        """Contains all connections that are permanently authenticated after an HTTP CONNECT"""
 
-    def enabled(self):
-        return any([self.nonanonymous, self.htpasswd, self.singleuser])
+    def enabled(self) -> bool:
+        return any([self.nonanonymous, self.htpasswd, self.singleuser, self.ldapconn, self.ldapserver])
 
-    def which_auth_header(self, f):
-        if f.mode == "regular":
+    def is_proxy_auth(self) -> bool:
+        """
+        Returns:
+            - True, if authentication is done as if mitmproxy is a proxy
+            - False, if authentication is done as if mitmproxy is a HTTP server
+        """
+        return ctx.options.mode == "regular" or ctx.options.mode.startswith("upstream:")
+
+    def which_auth_header(self) -> str:
+        if self.is_proxy_auth():
             return 'Proxy-Authorization'
         else:
             return 'Authorization'
 
-    def auth_required_response(self, f):
-        if f.mode == "regular":
-            hdrname = 'Proxy-Authenticate'
-        else:
-            hdrname = 'WWW-Authenticate'
-
-        headers = mitmproxy.net.http.Headers()
-        headers[hdrname] = 'Basic realm="%s"' % REALM
-
-        if f.mode == "transparent":
+    def auth_required_response(self) -> http.HTTPResponse:
+        if self.is_proxy_auth():
             return http.make_error_response(
-                401,
-                "Authentication Required",
-                headers
+                status_codes.PROXY_AUTH_REQUIRED,
+                headers=mitmproxy.net.http.Headers(Proxy_Authenticate='Basic realm="{}"'.format(REALM)),
             )
         else:
             return http.make_error_response(
-                407,
-                "Proxy Authentication Required",
-                headers,
+                status_codes.UNAUTHORIZED,
+                headers=mitmproxy.net.http.Headers(WWW_Authenticate='Basic realm="{}"'.format(REALM)),
             )
 
-    def check(self, f):
-        auth_value = f.request.headers.get(self.which_auth_header(f), None)
-        if not auth_value:
-            return False
-        parts = parse_http_basic_auth(auth_value)
-        if not parts:
-            return False
-        scheme, username, password = parts
-        if scheme.lower() != 'basic':
-            return False
+    def check(self, f: http.HTTPFlow) -> Optional[Tuple[str, str]]:
+        """
+        Check if a request is correctly authenticated.
+        Returns:
+            - a (username, password) tuple if successful,
+            - None, otherwise.
+        """
+        auth_value = f.request.headers.get(self.which_auth_header(), "")
+        try:
+            scheme, username, password = parse_http_basic_auth(auth_value)
+        except ValueError:
+            return None
 
         if self.nonanonymous:
-            pass
+            return username, password
         elif self.singleuser:
-            if [username, password] != self.singleuser:
-                return False
+            if self.singleuser == [username, password]:
+                return username, password
         elif self.htpasswd:
-            if not self.htpasswd.check_password(username, password):
-                return False
-        else:
-            raise NotImplementedError("Should never happen.")
+            if self.htpasswd.check_password(username, password):
+                return username, password
+        elif self.ldapconn:
+            if not username or not password:
+                return None
+            self.ldapconn.search(ctx.options.proxyauth.split(':')[4], '(cn=' + username + ')')
+            if self.ldapconn.response:
+                conn = ldap3.Connection(
+                    self.ldapserver,
+                    self.ldapconn.response[0]['dn'],
+                    password,
+                    auto_bind=True)
+                if conn:
+                    return username, password
+        return None
 
-        return True
-
-    def authenticate(self, f):
-        if self.check(f):
-            del f.request.headers[self.which_auth_header(f)]
+    def authenticate(self, f: http.HTTPFlow) -> bool:
+        valid_credentials = self.check(f)
+        if valid_credentials:
+            f.metadata["proxyauth"] = valid_credentials
+            del f.request.headers[self.which_auth_header()]
+            return True
         else:
-            f.response = self.auth_required_response(f)
+            f.response = self.auth_required_response()
+            return False
 
     # Handlers
-    def configure(self, options, updated):
-        if "auth_nonanonymous" in updated:
-            self.nonanonymous = options.auth_nonanonymous
-        if "auth_singleuser" in updated:
-            if options.auth_singleuser:
-                parts = options.auth_singleuser.split(':')
-                if len(parts) != 2:
-                    raise exceptions.OptionsError(
-                        "Invalid single-user auth specification."
-                    )
-                self.singleuser = parts
-            else:
-                self.singleuser = None
-        if "auth_htpasswd" in updated:
-            if options.auth_htpasswd:
-                try:
-                    self.htpasswd = passlib.apache.HtpasswdFile(
-                        options.auth_htpasswd
-                    )
-                except (ValueError, OSError) as v:
-                    raise exceptions.OptionsError(
-                        "Could not open htpasswd file: %s" % v
-                    )
-            else:
-                self.htpasswd = None
+    def configure(self, updated):
+        if "proxyauth" in updated:
+            self.nonanonymous = False
+            self.singleuser = None
+            self.htpasswd = None
+            self.ldapserver = None
+            if ctx.options.proxyauth:
+                if ctx.options.proxyauth == "any":
+                    self.nonanonymous = True
+                elif ctx.options.proxyauth.startswith("@"):
+                    p = ctx.options.proxyauth[1:]
+                    try:
+                        self.htpasswd = passlib.apache.HtpasswdFile(p)
+                    except (ValueError, OSError) as v:
+                        raise exceptions.OptionsError(
+                            "Could not open htpasswd file: %s" % p
+                        )
+                elif ctx.options.proxyauth.startswith("ldap"):
+                    parts = ctx.options.proxyauth.split(':')
+                    security = parts[0]
+                    ldap_server = parts[1]
+                    dn_baseauth = parts[2]
+                    password_baseauth = parts[3]
+                    if len(parts) != 5:
+                        raise exceptions.OptionsError(
+                            "Invalid ldap specification"
+                        )
+                    if security == "ldaps":
+                        server = ldap3.Server(ldap_server, use_ssl=True)
+                    elif security == "ldap":
+                        server = ldap3.Server(ldap_server)
+                    else:
+                        raise exceptions.OptionsError(
+                            "Invalid ldap specfication on the first part"
+                        )
+                    conn = ldap3.Connection(
+                        server,
+                        dn_baseauth,
+                        password_baseauth,
+                        auto_bind=True)
+                    self.ldapconn = conn
+                    self.ldapserver = server
+                else:
+                    parts = ctx.options.proxyauth.split(':')
+                    if len(parts) != 2:
+                        raise exceptions.OptionsError(
+                            "Invalid single-user auth specification."
+                        )
+                    self.singleuser = parts
         if self.enabled():
-            if options.mode == "transparent":
+            if ctx.options.mode == "transparent":
                 raise exceptions.OptionsError(
                     "Proxy Authentication not supported in transparent mode."
                 )
-            elif options.mode == "socks5":
+            if ctx.options.mode == "socks5":
                 raise exceptions.OptionsError(
                     "Proxy Authentication not supported in SOCKS mode. "
                     "https://github.com/mitmproxy/mitmproxy/issues/738"
                 )
-            # TODO: check for multiple auth options
+                # TODO: check for multiple auth options
 
-    def http_connect(self, f):
-        if self.enabled() and f.mode == "regular":
-            self.authenticate(f)
-
-    def requestheaders(self, f):
+    def http_connect(self, f: http.HTTPFlow) -> None:
         if self.enabled():
-            # Are we already authenticated in CONNECT?
-            if not (f.mode == "regular" and f.server_conn.via):
-                self.authenticate(f)
+            if self.authenticate(f):
+                self.authenticated[f.client_conn] = f.metadata["proxyauth"]
+
+    def requestheaders(self, f: http.HTTPFlow) -> None:
+        if self.enabled():
+            # Is this connection authenticated by a previous HTTP CONNECT?
+            if f.client_conn in self.authenticated:
+                f.metadata["proxyauth"] = self.authenticated[f.client_conn]
+                return
+            self.authenticate(f)

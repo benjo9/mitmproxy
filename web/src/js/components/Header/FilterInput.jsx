@@ -1,4 +1,5 @@
-import React, { PropTypes, Component } from 'react'
+import React, { Component } from 'react'
+import PropTypes from 'prop-types'
 import ReactDOM from 'react-dom'
 import classnames from 'classnames'
 import { Key } from '../../utils.js'
@@ -21,6 +22,7 @@ export default class FilterInput extends Component {
         this.onKeyDown = this.onKeyDown.bind(this)
         this.onMouseEnter = this.onMouseEnter.bind(this)
         this.onMouseLeave = this.onMouseLeave.bind(this)
+        this.selectFilter = this.selectFilter.bind(this)
     }
 
     componentWillReceiveProps(nextProps) {
@@ -41,7 +43,7 @@ export default class FilterInput extends Component {
 
     getDesc() {
         if (!this.state.value) {
-            return <FilterDocs/>
+            return <FilterDocs selectHandler={this.selectFilter}/>
         }
         try {
             return Filt.parse(this.state.value).desc
@@ -83,6 +85,11 @@ export default class FilterInput extends Component {
             this.setState({mousefocus: false})
         }
         e.stopPropagation()
+    }
+
+    selectFilter(cmd) {
+        this.setState({value: cmd})
+        ReactDOM.findDOMNode(this.refs.input).focus()
     }
 
     blur() {

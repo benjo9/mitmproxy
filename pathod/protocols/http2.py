@@ -172,9 +172,9 @@ class HTTP2StateProtocol:
     def assemble_request(self, request):
         assert isinstance(request, mitmproxy.net.http.request.Request)
 
-        authority = self.tcp_handler.sni if self.tcp_handler.sni else self.tcp_handler.address.host
-        if self.tcp_handler.address.port != 443:
-            authority += ":%d" % self.tcp_handler.address.port
+        authority = self.tcp_handler.sni if self.tcp_handler.sni else self.tcp_handler.address[0]
+        if self.tcp_handler.address[1] != 443:
+            authority += ":%d" % self.tcp_handler.address[1]
 
         headers = request.headers.copy()
 
@@ -247,13 +247,13 @@ class HTTP2StateProtocol:
         raw_bytes = frm.serialize()
         self.tcp_handler.wfile.write(raw_bytes)
         self.tcp_handler.wfile.flush()
-        if not hide and self.dump_frames:  # pragma no cover
+        if not hide and self.dump_frames:  # pragma: no cover
             print(">> " + repr(frm))
 
     def read_frame(self, hide=False):
         while True:
             frm = http2.parse_frame(*http2.read_raw_frame(self.tcp_handler.rfile))
-            if not hide and self.dump_frames:  # pragma no cover
+            if not hide and self.dump_frames:  # pragma: no cover
                 print("<< " + repr(frm))
 
             if isinstance(frm, hyperframe.frame.PingFrame):
@@ -337,7 +337,7 @@ class HTTP2StateProtocol:
         if end_stream:
             frms[0].flags.add('END_STREAM')
 
-        if self.dump_frames:  # pragma no cover
+        if self.dump_frames:  # pragma: no cover
             for frm in frms:
                 print(">> ", repr(frm))
 
@@ -355,7 +355,7 @@ class HTTP2StateProtocol:
             data=body[i:i + chunk_size]) for i in chunks]
         frms[-1].flags.add('END_STREAM')
 
-        if self.dump_frames:  # pragma no cover
+        if self.dump_frames:  # pragma: no cover
             for frm in frms:
                 print(">> ", repr(frm))
 

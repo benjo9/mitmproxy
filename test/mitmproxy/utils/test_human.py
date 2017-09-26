@@ -22,6 +22,7 @@ def test_parse_size():
         human.parse_size("1f")
     with pytest.raises(ValueError):
         human.parse_size("ak")
+    assert human.parse_size(None) is None
 
 
 def test_pretty_size():
@@ -46,3 +47,10 @@ def test_pretty_duration():
     assert human.pretty_duration(10000) == "10000s"
     assert human.pretty_duration(1.123) == "1.12s"
     assert human.pretty_duration(0.123) == "123ms"
+
+
+def test_format_address():
+    assert human.format_address(("::1", "54010", "0", "0")) == "[::1]:54010"
+    assert human.format_address(("::ffff:127.0.0.1", "54010", "0", "0")) == "127.0.0.1:54010"
+    assert human.format_address(("127.0.0.1", "54010")) == "127.0.0.1:54010"
+    assert human.format_address(("example.com", "54010")) == "example.com:54010"

@@ -16,9 +16,6 @@ class _ServerThread(threading.Thread):
     def run(self):
         self.server.serve_forever()
 
-    def shutdown(self):
-        self.server.shutdown()
-
 
 class _TServer(tcp.TCPServer):
 
@@ -54,9 +51,9 @@ class _TServer(tcp.TCPServer):
             raw_key = self.ssl.get(
                 "key",
                 tutils.test_data.path("mitmproxy/net/data/server.key"))
-            key = OpenSSL.crypto.load_privatekey(
-                OpenSSL.crypto.FILETYPE_PEM,
-                open(raw_key, "rb").read())
+            with open(raw_key) as f:
+                raw_key = f.read()
+            key = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, raw_key)
             if self.ssl.get("v3_only", False):
                 method = OpenSSL.SSL.SSLv3_METHOD
                 options = OpenSSL.SSL.OP_NO_SSLv2 | OpenSSL.SSL.OP_NO_TLSv1
@@ -64,7 +61,8 @@ class _TServer(tcp.TCPServer):
                 method = OpenSSL.SSL.SSLv23_METHOD
                 options = None
             h.convert_to_ssl(
-                cert, key,
+                cert,
+                key,
                 method=method,
                 options=options,
                 handle_sni=getattr(h, "handle_sni", None),
@@ -86,13 +84,13 @@ class _TServer(tcp.TCPServer):
 class ServerTestBase:
     ssl = None
     handler = None
-    addr = ("localhost", 0)
+    addr = ("127.0.0.1", 0)
 
     @classmethod
     def setup_class(cls, **kwargs):
         cls.q = queue.Queue()
         s = cls.makeserver(**kwargs)
-        cls.port = s.address.port
+        cls.port = s.address[1]
         cls.server = _ServerThread(s)
         cls.server.start()
 
@@ -103,7 +101,7 @@ class ServerTestBase:
 
     @classmethod
     def teardown_class(cls):
-        cls.server.shutdown()
+        cls.server.server.shutdown()
 
     def teardown(self):
         self.server.server.wait_for_silence()
