@@ -36,9 +36,12 @@ class TestClientPlayback:
                 assert rp.called
                 assert cp.current_thread
 
-            cp.flows = None
-            cp.current_thread = None
+            cp.flows = []
+            cp.current_thread.is_alive.return_value = False
+            assert cp.count() == 1
             cp.tick()
+            assert cp.count() == 0
+            assert tctx.master.has_event("update")
             assert tctx.master.has_event("processing_complete")
 
             cp.current_thread = MockThread()
@@ -48,6 +51,10 @@ class TestClientPlayback:
             cp.start_replay([f])
             cp.stop_replay()
             assert not cp.flows
+
+            df = tflow.DummyFlow(tflow.tclient_conn(), tflow.tserver_conn(), True)
+            with pytest.raises(exceptions.CommandError, match="Can't replay live flow."):
+                cp.start_replay([df])
 
     def test_load_file(self, tmpdir):
         cp = clientplayback.ClientPlayback()

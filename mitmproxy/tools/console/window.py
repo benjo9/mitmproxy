@@ -1,4 +1,7 @@
+import re
+
 import urwid
+from mitmproxy.tools.console import common
 from mitmproxy.tools.console import signals
 from mitmproxy.tools.console import statusbar
 from mitmproxy.tools.console import flowlist
@@ -12,15 +15,37 @@ from mitmproxy.tools.console import grideditor
 from mitmproxy.tools.console import eventlog
 
 
-class Header(urwid.Frame):
-    def __init__(self, widget, title, focus):
-        super().__init__(
-            widget,
+class StackWidget(urwid.Frame):
+    def __init__(self, window, widget, title, focus):
+        self.is_focused = focus
+        self.window = window
+
+        if title:
             header = urwid.AttrWrap(
                 urwid.Text(title),
                 "heading" if focus else "heading_inactive"
             )
+        else:
+            header = None
+        super().__init__(
+            widget,
+            header=header
         )
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        if event == "mouse press" and button == 1 and not self.is_focused:
+            self.window.switch()
+        return super().mouse_event(size, event, button, col, row, focus)
+
+    def keypress(self, size, key):
+        # Make sure that we don't propagate cursor events outside of the widget.
+        # Otherwise, in a horizontal layout, urwid's Pile would change the focused widget
+        # if we cannot scroll any further.
+        ret = super().keypress(size, key)
+        command = self._command_map[ret]  # awkward as they don't implement a full dict api
+        if command and command.startswith("cursor"):
+            return None
+        return ret
 
 
 class WindowStack:
@@ -139,12 +164,17 @@ class Window(urwid.Frame):
             self.pane = 0
 
         def wrapped(idx):
-            window = self.stacks[idx].top_window()
             widget = self.stacks[idx].top_widget()
-            if self.master.options.console_layout_headers and window.title:
-                return Header(widget, window.title, self.pane == idx)
+            if self.master.options.console_layout_headers:
+                title = self.stacks[idx].top_window().title
             else:
-                return widget
+                title = None
+            return StackWidget(
+                self,
+                widget,
+                title,
+                self.pane == idx
+            )
 
         w = None
         if c == "single":
@@ -153,12 +183,14 @@ class Window(urwid.Frame):
             w = urwid.Pile(
                 [
                     wrapped(i) for i, s in enumerate(self.stacks)
-                ]
+                ],
+                focus_item=self.pane
             )
         else:
             w = urwid.Columns(
                 [wrapped(i) for i, s in enumerate(self.stacks)],
-                dividechars=1
+                dividechars=1,
+                focus_column=self.pane
             )
 
         self.body = urwid.AttrWrap(w, "background")
@@ -211,28 +243,34 @@ class Window(urwid.Frame):
             self.view_changed()
             self.focus_changed()
 
+    def stacks_sorted_by_focus(self):
+        """
+        Returns:
+            self.stacks, with the focused stack first.
+        """
+        stacks = self.stacks.copy()
+        stacks.insert(0, stacks.pop(self.pane))
+        return stacks
+
     def current(self, keyctx):
         """
-            Returns the active widget, but only the current focus or overlay has
-            a matching key context.
+        Returns the active widget with a matching key context, including overlays.
+        If multiple stacks have an active widget with a matching key context,
+        the currently focused stack is preferred.
         """
-        t = self.focus_stack().top_widget()
-        if t.keyctx == keyctx:
-            return t
+        for s in self.stacks_sorted_by_focus():
+            t = s.top_widget()
+            if t.keyctx == keyctx:
+                return t
 
     def current_window(self, keyctx):
         """
-            Returns the active window, ignoring overlays.
+        Returns the active window with a matching key context, ignoring overlays.
+        If multiple stacks have an active widget with a matching key context,
+        the currently focused stack is preferred.
         """
-        t = self.focus_stack().top_window()
-        if t.keyctx == keyctx:
-            return t
-
-    def any(self, keyctx):
-        """
-            Returns the top window of either stack if they match the context.
-        """
-        for t in [x.top_window() for x in self.stacks]:
+        for s in self.stacks_sorted_by_focus():
+            t = s.top_window()
             if t.keyctx == keyctx:
                 return t
 
@@ -267,10 +305,19 @@ class Window(urwid.Frame):
             return True
 
     def keypress(self, size, k):
-        if self.focus_part == "footer":
-            return super().keypress(size, k)
-        else:
-            fs = self.focus_stack().top_widget()
-            k = fs.keypress(size, k)
-            if k:
-                return self.master.keymap.handle(fs.keyctx, k)
+        k = super().keypress(size, k)
+        if k:
+            return self.master.keymap.handle(
+                self.focus_stack().top_widget().keyctx,
+                k
+            )
+
+
+class Screen(urwid.raw_display.Screen):
+
+    def write(self, data):
+        if common.IS_WSL:
+            # replace urwid's SI/SO, which produce artifacts under WSL.
+            # at some point we may figure out what they actually do.
+            data = re.sub("[\x0e\x0f]", "", data)
+        super().write(data)

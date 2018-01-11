@@ -8,6 +8,7 @@ from mitmproxy import exceptions
 from mitmproxy import eventsequence
 from mitmproxy import controller
 from mitmproxy import flow
+from mitmproxy import log
 from . import ctx
 import pprint
 
@@ -54,7 +55,13 @@ class StreamLog:
 
 @contextlib.contextmanager
 def safecall():
-    stdout_replacement = StreamLog(ctx.log.warn)
+    # resolve ctx.master here.
+    # we want to be threadsafe, and ctx.master may already be cleared when an addon prints().
+    tell = ctx.master.tell
+    # don't use master.add_log (which is not thread-safe). Instead, put on event queue.
+    stdout_replacement = StreamLog(
+        lambda message: tell("log", log.LogEntry(message, "warn"))
+    )
     try:
         with contextlib.redirect_stdout(stdout_replacement):
             yield
@@ -223,7 +230,7 @@ class AddonManager:
 
         self.trigger(name, message)
 
-        if message.reply.state != "taken":
+        if message.reply.state == "start":
             message.reply.take()
             if not message.reply.has_message:
                 message.reply.ack()

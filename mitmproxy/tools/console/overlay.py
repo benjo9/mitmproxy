@@ -5,6 +5,7 @@ import urwid
 from mitmproxy.tools.console import signals
 from mitmproxy.tools.console import grideditor
 from mitmproxy.tools.console import layoutwidget
+from mitmproxy.tools.console import keymap
 
 
 class SimpleOverlay(urwid.Overlay, layoutwidget.LayoutWidget):
@@ -114,13 +115,21 @@ class Chooser(urwid.WidgetWrap, layoutwidget.LayoutWidget):
         return True
 
     def keypress(self, size, key):
-        key = self.master.keymap.handle("chooser", key)
+        key = self.master.keymap.handle_only("chooser", key)
         if key == "m_select":
             self.callback(self.choices[self.walker.index])
             signals.pop_view_state.send(self)
+            return
         elif key == "esc":
             signals.pop_view_state.send(self)
-        return super().keypress(size, key)
+            return
+
+        binding = self.master.keymap.get("global", key)
+        # This is extremely awkward. We need a better way to match nav keys only.
+        if binding and binding.command.startswith("console.nav"):
+            self.master.keymap.handle("global", key)
+        elif key in keymap.navkeys:
+            return super().keypress(size, key)
 
 
 class OptionsOverlay(urwid.WidgetWrap, layoutwidget.LayoutWidget):
@@ -137,6 +146,33 @@ class OptionsOverlay(urwid.WidgetWrap, layoutwidget.LayoutWidget):
                 urwid.LineBox(
                     urwid.BoxAdapter(self.ge, rows - vspace),
                     title=name
+                ),
+                "background"
+            )
+        )
+        self.width = math.ceil(cols * 0.8)
+
+    def key_responder(self):
+        return self.ge.key_responder()
+
+    def layout_popping(self):
+        return self.ge.layout_popping()
+
+
+class DataViewerOverlay(urwid.WidgetWrap, layoutwidget.LayoutWidget):
+    keyctx = "grideditor"
+
+    def __init__(self, master, vals):
+        """
+            vspace: how much vertical space to keep clear
+        """
+        cols, rows = master.ui.get_cols_rows()
+        self.ge = grideditor.DataViewer(master, vals)
+        super().__init__(
+            urwid.AttrWrap(
+                urwid.LineBox(
+                    urwid.BoxAdapter(self.ge, rows - 5),
+                    title="Data viewer"
                 ),
                 "background"
             )

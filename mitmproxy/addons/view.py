@@ -238,7 +238,7 @@ class View(collections.Sequence):
     @command.command("view.order.options")
     def order_options(self) -> typing.Sequence[str]:
         """
-            A list of all the orders we support.
+            Choices supported by the view_order option.
         """
         return list(sorted(self.orders.keys()))
 
@@ -351,13 +351,13 @@ class View(collections.Sequence):
         ctx.master.addons.trigger("update", updated)
 
     @command.command("view.load")
-    def load_file(self, path: str) -> None:
+    def load_file(self, path: mitmproxy.types.Path) -> None:
         """
             Load flows into the view, without processing them with addons.
         """
-        path = os.path.expanduser(path)
+        spath = os.path.expanduser(path)
         try:
-            with open(path, "rb") as f:
+            with open(spath, "rb") as f:
                 for i in io.FlowReader(f).stream():
                     # Do this to get a new ID, so we can load the same file N times and
                     # get new flows each time. It would be more efficient to just have a
@@ -406,8 +406,11 @@ class View(collections.Sequence):
                 if f.killable:
                     f.kill()
                 if f in self._view:
+                    # We manually pass the index here because multiple flows may have the same
+                    # sorting key, and we cannot reconstruct the index from that.
+                    idx = self._view.index(f)
                     self._view.remove(f)
-                    self.sig_view_remove.send(self, flow=f)
+                    self.sig_view_remove.send(self, flow=f, index=idx)
                 del self._store[f.id]
                 self.sig_store_remove.send(self, flow=f)
         if len(flows) > 1:
@@ -438,7 +441,10 @@ class View(collections.Sequence):
 
     @command.command("view.create")
     def create(self, method: str, url: str) -> None:
-        req = http.HTTPRequest.make(method.upper(), url)
+        try:
+            req = http.HTTPRequest.make(method.upper(), url)
+        except ValueError as e:
+            raise exceptions.CommandError("Invalid URL: %s" % e)
         c = connections.ClientConnection.make_dummy(("", 0))
         s = connections.ServerConnection.make_dummy((req.host, req.port))
         f = http.HTTPFlow(c, s)
@@ -507,11 +513,12 @@ class View(collections.Sequence):
                         self.sig_view_update.send(self, flow=f)
                 else:
                     try:
-                        self._view.remove(f)
-                        self.sig_view_remove.send(self, flow=f)
+                        idx = self._view.index(f)
                     except ValueError:
-                        # The value was not in the view
-                        pass
+                        pass  # The value was not in the view
+                    else:
+                        self._view.remove(f)
+                        self.sig_view_remove.send(self, flow=f, index=idx)
 
 
 class Focus:
@@ -554,11 +561,11 @@ class Focus:
     def _nearest(self, f, v):
         return min(v._bisect(f), len(v) - 1)
 
-    def _sig_view_remove(self, view, flow):
+    def _sig_view_remove(self, view, flow, index):
         if len(view) == 0:
             self.flow = None
         elif flow is self.flow:
-            self.flow = view[self._nearest(self.flow, view)]
+            self.index = min(index, len(self.view) - 1)
 
     def _sig_view_refresh(self, view):
         if len(view) == 0:

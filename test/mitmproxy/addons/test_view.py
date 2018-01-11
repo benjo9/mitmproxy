@@ -30,7 +30,7 @@ def test_order_refresh():
     with taddons.context() as tctx:
         tctx.configure(v, view_order="time")
         v.add([tf])
-        tf.request.timestamp_start = 1
+        tf.request.timestamp_start = 10
         assert not sargs
         v.update([tf])
         assert sargs
@@ -41,7 +41,7 @@ def test_order_generators():
     tf = tflow.tflow(resp=True)
 
     rs = view.OrderRequestStart(v)
-    assert rs.generate(tf) == 0
+    assert rs.generate(tf) == 946681200
 
     rm = view.OrderRequestMethod(v)
     assert rm.generate(tf) == tf.request.method
@@ -147,6 +147,10 @@ def test_create():
         assert v[0].request.url == "http://foo.com/"
         v.create("get", "http://foo.com")
         assert len(v) == 2
+        with pytest.raises(exceptions.CommandError, match="Invalid URL"):
+            v.create("get", "http://foo.com\\")
+        with pytest.raises(exceptions.CommandError, match="Invalid URL"):
+            v.create("get", "http://")
 
 
 def test_orders():

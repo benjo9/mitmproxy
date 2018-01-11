@@ -34,9 +34,9 @@ install:
 test_script:
   - ps: "tox -- --verbose --cov-report=term"
   - ps: |
-      $Env:VERSION = $(python mitmproxy/version.py)
+      $Env:VERSION = $(python -m mitmproxy.version)
       $Env:SKIP_MITMPROXY = "python -c `"print('skip mitmproxy')`""
-      tox -e wheel
+      tox -e rtool -- wheel
       tox -e rtool -- bdist
 
   - ps: |
@@ -46,8 +46,9 @@ test_script:
       ) {
         echo "Decrypt license..."
         tox -e rtool -- decrypt release\installbuilder\license.xml.enc release\installbuilder\license.xml
+        $ibVersion = "17.12.0"
         $ibSetup = "C:\projects\mitmproxy\release\installbuilder-installer.exe"
-        $ibVersion = "17.4.0"
+        $ibCli = "C:\Program Files (x86)\BitRock InstallBuilder Enterprise $ibVersion\bin\builder-cli.exe"
         if (!(Test-Path $ibSetup)) {
           echo "Download InstallBuilder..."
           (New-Object System.Net.WebClient).DownloadFile(
@@ -56,15 +57,18 @@ test_script:
           )
         }
         echo "Install InstallBuilder..."
-        Start-Process $ibSetup "--mode unattended --unattendedmodeui none" -Wait
+        Start-Process $ibSetup "--mode unattended --unattendedmodeui none" -PassThru -NoNewWindow -Wait
+        # Wait until executable exists - no idea why this is necessary.
+        while (!(Test-Path $ibCli)) { Start-Sleep 0.1 }
         echo "Run InstallBuilder..."
-        & "C:\Program Files (x86)\BitRock InstallBuilder Enterprise $ibVersion\bin\builder-cli.exe" `
+        &$ibCli `
           build `
           .\release\installbuilder\mitmproxy.xml `
           windows `
           --license .\release\installbuilder\license.xml `
           --setvars project.version=$Env:VERSION `
           --verbose
+        while (!(Test-Path C:\projects\mitmproxy\release\dist\mitmproxy-*-windows-installer.exe)) { Start-Sleep 0.1 }
         echo "Installer build completed."
       }
 
@@ -75,6 +79,7 @@ deploy_script:
       ($Env:TOXENV -match "py35") -and
       (($Env:APPVEYOR_REPO_BRANCH -In ("master", "pyinstaller")) -or ($Env:APPVEYOR_REPO_TAG -match "true"))
     ) {
+      tox -e rtool -- decrypt release\known_hosts.enc release\known_hosts
       tox -e rtool -- upload-snapshot --bdist --wheel --installer
     }
 

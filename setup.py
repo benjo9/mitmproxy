@@ -1,7 +1,7 @@
 import os
-import runpy
 from codecs import open
 
+import re
 from setuptools import setup, find_packages
 
 # Based on https://github.com/pypa/sampleproject/blob/master/setup.py
@@ -12,7 +12,8 @@ here = os.path.abspath(os.path.dirname(__file__))
 with open(os.path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
-VERSION = runpy.run_path(os.path.join(here, "mitmproxy", "version.py"))["VERSION"]
+with open(os.path.join(here, "mitmproxy", "version.py")) as f:
+    VERSION = re.search(r'VERSION = "(.+?)(?:-0x|")', f.read()).group(1)
 
 setup(
     name="mitmproxy",
@@ -64,30 +65,32 @@ setup(
         "brotlipy>=0.5.1, <0.8",
         "certifi>=2015.11.20.1",  # no semver here - this should always be on the last release!
         "click>=6.2, <7",
-        "cryptography>=2.0,<2.1",
+        "cryptography>=2.1.4,<2.2",
+        'h11>=0.7.0,<0.8',
         "h2>=3.0, <4",
         "hyperframe>=5.0, <6",
         "kaitaistruct>=0.7, <0.8",
-        "ldap3>=2.2.0, <2.4",
+        "ldap3>=2.4,<2.5",
         "passlib>=1.6.5, <1.8",
-        "pyasn1>=0.3.1, <0.4",
-        "pyOpenSSL>=17.3,<17.4",
+        "pyasn1>=0.3.1,<0.5",
+        "pyOpenSSL>=17.2,<17.6",
         "pyparsing>=2.1.3, <2.3",
-        "pyperclip>=1.5.22, <1.6",
+        "pyperclip>=1.5.22, <1.7",
         "requests>=2.9.1, <3",
         "ruamel.yaml>=0.13.2, <0.16",
         "sortedcontainers>=1.5.4, <1.6",
         "tornado>=4.3, <4.6",
         "urwid>=1.3.1, <1.4",
+        "wsproto>=0.11.0,<0.12.0",
     ],
     extras_require={
         ':sys_platform == "win32"': [
-            "pydivert>=2.0.3, <2.1",
+            "pydivert>=2.0.3,<2.2",
         ],
         'dev': [
-            "flake8>=3.2.1, <3.5",
+            "flake8>=3.5, <3.6",
             "Flask>=0.10.1, <0.13",
-            "mypy>=0.521,<0.522",
+            "mypy>=0.560,<0.561",
             "pytest-cov>=2.2.1, <3",
             "pytest-faulthandler>=1.3.0, <2",
             "pytest-timeout>=1.0.0, <2",
@@ -102,7 +105,7 @@ setup(
         ],
         'examples': [
             "beautifulsoup4>=4.4.1, <4.7",
-            "Pillow>=3.2,<4.3",
+            "Pillow>=4.3,<5.1",
         ]
     }
 )

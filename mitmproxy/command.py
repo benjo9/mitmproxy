@@ -2,39 +2,43 @@
     This module manges and invokes typed commands.
 """
 import inspect
+import types
+import io
 import typing
 import shlex
 import textwrap
 import functools
 import sys
 
-from mitmproxy.utils import typecheck
 from mitmproxy import exceptions
-from mitmproxy import flow
+import mitmproxy.types
 
 
-Cuts = typing.Sequence[
-    typing.Sequence[typing.Union[str, bytes]]
-]
+def verify_arg_signature(f: typing.Callable, args: list, kwargs: dict) -> None:
+    sig = inspect.signature(f)
+    try:
+        sig.bind(*args, **kwargs)
+    except TypeError as v:
+        raise exceptions.CommandError("command argument mismatch: %s" % v.args[0])
 
 
-def typename(t: type, ret: bool) -> str:
+def lexer(s):
+    # mypy mis-identifies shlex.shlex as abstract
+    lex = shlex.shlex(s)  # type: ignore
+    lex.wordchars += "."
+    lex.whitespace_split = True
+    lex.commenters = ''
+    return lex
+
+
+def typename(t: type) -> str:
     """
-        Translates a type to an explanatory string. If ret is True, we're
-        looking at a return type, else we're looking at a parameter type.
+        Translates a type to an explanatory string.
     """
-    if issubclass(t, (str, int, bool)):
-        return t.__name__
-    elif t == typing.Sequence[flow.Flow]:
-        return "[flow]" if ret else "flowspec"
-    elif t == typing.Sequence[str]:
-        return "[str]"
-    elif t == Cuts:
-        return "[cuts]" if ret else "cutspec"
-    elif t == flow.Flow:
-        return "flow"
-    else:  # pragma: no cover
+    to = mitmproxy.types.CommandTypes.get(t, None)
+    if not to:
         raise NotImplementedError(t)
+    return to.display
 
 
 class Command:
@@ -57,13 +61,13 @@ class Command:
         self.returntype = sig.return_annotation
 
     def paramnames(self) -> typing.Sequence[str]:
-        v = [typename(i, False) for i in self.paramtypes]
+        v = [typename(i) for i in self.paramtypes]
         if self.has_positional:
             v[-1] = "*" + v[-1]
         return v
 
     def retname(self) -> str:
-        return typename(self.returntype, True) if self.returntype else ""
+        return typename(self.returntype) if self.returntype else ""
 
     def signature_help(self) -> str:
         params = " ".join(self.paramnames())
@@ -72,13 +76,8 @@ class Command:
             ret = " -> " + ret
         return "%s %s%s" % (self.path, params, ret)
 
-    def call(self, args: typing.Sequence[str]):
-        """
-            Call the command with a list of arguments. At this point, all
-            arguments are strings.
-        """
-        if not self.has_positional and (len(self.paramtypes) != len(args)):
-            raise exceptions.CommandError("Usage: %s" % self.signature_help())
+    def prepare_args(self, args: typing.Sequence[str]) -> typing.List[typing.Any]:
+        verify_arg_signature(self.func, list(args), {})
 
         remainder = []  # type: typing.Sequence[str]
         if self.has_positional:
@@ -86,35 +85,47 @@ class Command:
             args = args[:len(self.paramtypes) - 1]
 
         pargs = []
-        for i in range(len(args)):
-            if typecheck.check_command_type(args[i], self.paramtypes[i]):
-                pargs.append(args[i])
-            else:
-                pargs.append(parsearg(self.manager, args[i], self.paramtypes[i]))
+        for arg, paramtype in zip(args, self.paramtypes):
+            pargs.append(parsearg(self.manager, arg, paramtype))
+        pargs.extend(remainder)
+        return pargs
 
-        if remainder:
-            chk = typecheck.check_command_type(
-                remainder,
-                typing.Sequence[self.paramtypes[-1]]  # type: ignore
-            )
-            if chk:
-                pargs.extend(remainder)
-            else:
-                raise exceptions.CommandError("Invalid value type.")
+    def call(self, args: typing.Sequence[str]) -> typing.Any:
+        """
+            Call the command with a list of arguments. At this point, all
+            arguments are strings.
+        """
+        pargs = self.prepare_args(args)
 
         with self.manager.master.handlecontext():
             ret = self.func(*pargs)
 
-        if not typecheck.check_command_type(ret, self.returntype):
-            raise exceptions.CommandError("Command returned unexpected data")
-
+        if ret is None and self.returntype is None:
+            return
+        typ = mitmproxy.types.CommandTypes.get(self.returntype)
+        if not typ.is_valid(self.manager, typ, ret):
+            raise exceptions.CommandError(
+                "%s returned unexpected data - expected %s" % (
+                    self.path, typ.display
+                )
+            )
         return ret
 
 
-class CommandManager:
+ParseResult = typing.NamedTuple(
+    "ParseResult",
+    [
+        ("value", str),
+        ("type", typing.Type),
+        ("valid", bool),
+    ],
+)
+
+
+class CommandManager(mitmproxy.types._CommandBase):
     def __init__(self, master):
         self.master = master
-        self.commands = {}
+        self.commands = {}  # type: typing.Dict[str, Command]
 
     def collect_commands(self, addon):
         for i in dir(addon):
@@ -126,7 +137,73 @@ class CommandManager:
     def add(self, path: str, func: typing.Callable):
         self.commands[path] = Command(self, path, func)
 
-    def call_args(self, path, args):
+    def parse_partial(
+        self,
+        cmdstr: str
+    ) -> typing.Tuple[typing.Sequence[ParseResult], typing.Sequence[str]]:
+        """
+            Parse a possibly partial command. Return a sequence of ParseResults and a sequence of remainder type help items.
+        """
+        buf = io.StringIO(cmdstr)
+        parts = []  # type: typing.List[str]
+        lex = lexer(buf)
+        while 1:
+            remainder = cmdstr[buf.tell():]
+            try:
+                t = lex.get_token()
+            except ValueError:
+                parts.append(remainder)
+                break
+            if not t:
+                break
+            parts.append(t)
+        if not parts:
+            parts = [""]
+        elif cmdstr.endswith(" "):
+            parts.append("")
+
+        parse = []  # type: typing.List[ParseResult]
+        params = []  # type: typing.List[type]
+        typ = None  # type: typing.Type
+        for i in range(len(parts)):
+            if i == 0:
+                typ = mitmproxy.types.Cmd
+                if parts[i] in self.commands:
+                    params.extend(self.commands[parts[i]].paramtypes)
+            elif params:
+                typ = params.pop(0)
+                if typ == mitmproxy.types.Cmd and params and params[0] == mitmproxy.types.Arg:
+                    if parts[i] in self.commands:
+                        params[:] = self.commands[parts[i]].paramtypes
+            else:
+                typ = mitmproxy.types.Unknown
+
+            to = mitmproxy.types.CommandTypes.get(typ, None)
+            valid = False
+            if to:
+                try:
+                    to.parse(self, typ, parts[i])
+                except exceptions.TypeError:
+                    valid = False
+                else:
+                    valid = True
+
+            parse.append(
+                ParseResult(
+                    value=parts[i],
+                    type=typ,
+                    valid=valid,
+                )
+            )
+
+        remhelp = []  # type: typing.List[str]
+        for x in params:
+            remt = mitmproxy.types.CommandTypes.get(x, None)
+            remhelp.append(remt.display)
+
+        return parse, remhelp
+
+    def call_args(self, path: str, args: typing.Sequence[str]) -> typing.Any:
         """
             Call a command using a list of string arguments. May raise CommandError.
         """
@@ -138,7 +215,7 @@ class CommandManager:
         """
             Call a command using a string. May raise CommandError.
         """
-        parts = shlex.split(cmdstr)
+        parts = list(lexer(cmdstr))
         if not len(parts) >= 1:
             raise exceptions.CommandError("Invalid command: %s" % cmdstr)
         return self.call_args(parts[0], parts[1:])
@@ -157,44 +234,34 @@ def parsearg(manager: CommandManager, spec: str, argtype: type) -> typing.Any:
     """
         Convert a string to a argument to the appropriate type.
     """
-    if issubclass(argtype, str):
-        return spec
-    elif argtype == bool:
-        if spec == "true":
-            return True
-        elif spec == "false":
-            return False
-        else:
-            raise exceptions.CommandError(
-                "Booleans are 'true' or 'false', got %s" % spec
-            )
-    elif issubclass(argtype, int):
-        try:
-            return int(spec)
-        except ValueError as e:
-            raise exceptions.CommandError("Expected an integer, got %s." % spec)
-    elif argtype == typing.Sequence[flow.Flow]:
-        return manager.call_args("view.resolve", [spec])
-    elif argtype == Cuts:
-        return manager.call_args("cut", [spec])
-    elif argtype == flow.Flow:
-        flows = manager.call_args("view.resolve", [spec])
-        if len(flows) != 1:
-            raise exceptions.CommandError(
-                "Command requires one flow, specification matched %s." % len(flows)
-            )
-        return flows[0]
-    elif argtype == typing.Sequence[str]:
-        return [i.strip() for i in spec.split(",")]
-    else:
+    t = mitmproxy.types.CommandTypes.get(argtype, None)
+    if not t:
         raise exceptions.CommandError("Unsupported argument type: %s" % argtype)
+    try:
+        return t.parse(manager, argtype, spec)  # type: ignore
+    except exceptions.TypeError as e:
+        raise exceptions.CommandError from e
 
 
 def command(path):
     def decorator(function):
         @functools.wraps(function)
         def wrapper(*args, **kwargs):
+            verify_arg_signature(function, args, kwargs)
             return function(*args, **kwargs)
         wrapper.__dict__["command_path"] = path
         return wrapper
+    return decorator
+
+
+def argument(name, type):
+    """
+        Set the type of a command argument at runtime. This is useful for more
+        specific types such as mitmproxy.types.Choice, which we cannot annotate
+        directly as mypy does not like that.
+    """
+    def decorator(f: types.FunctionType) -> types.FunctionType:
+        assert name in f.__annotations__
+        f.__annotations__[name] = type
+        return f
     return decorator

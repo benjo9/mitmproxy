@@ -11,7 +11,7 @@ from mitmproxy import options
 from mitmproxy import connections
 from mitmproxy.net import server_spec
 from mitmproxy.net.http import http1
-from mitmproxy.types import basethread
+from mitmproxy.coretypes import basethread
 from mitmproxy.utils import human
 
 
@@ -42,6 +42,7 @@ class RequestReplayThread(basethread.BaseThread):
         super().__init__(
             "RequestReplay (%s)" % f.request.url
         )
+        self.daemon = True
 
     def run(self):
         r = self.f.request
@@ -74,7 +75,7 @@ class RequestReplayThread(basethread.BaseThread):
                         )
                         if resp.status_code != 200:
                             raise exceptions.ReplayException("Upstream server refuses CONNECT request")
-                        server.establish_ssl(
+                        server.establish_tls(
                             self.options.client_certs,
                             sni=self.f.server_conn.sni
                         )
@@ -89,7 +90,7 @@ class RequestReplayThread(basethread.BaseThread):
                     )
                     server.connect()
                     if r.scheme == "https":
-                        server.establish_ssl(
+                        server.establish_tls(
                             self.options.client_certs,
                             sni=self.f.server_conn.sni
                         )

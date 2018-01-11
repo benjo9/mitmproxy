@@ -150,10 +150,10 @@ class TestResponseUtils:
         n = time.time()
         r.headers["date"] = email.utils.formatdate(n)
         pre = r.headers["date"]
-        r.refresh(n)
+        r.refresh(946681202)
         assert pre == r.headers["date"]
-        r.refresh(n + 60)
 
+        r.refresh(946681262)
         d = email.utils.parsedate_tz(r.headers["date"])
         d = email.utils.mktime_tz(d)
         # Weird that this is not exact...

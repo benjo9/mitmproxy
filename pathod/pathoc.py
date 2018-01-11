@@ -17,7 +17,7 @@ from mitmproxy.net import tcp, tls
 from mitmproxy.net import websockets
 from mitmproxy.net import socks
 from mitmproxy.net import http as net_http
-from mitmproxy.types import basethread
+from mitmproxy.coretypes import basethread
 from mitmproxy.utils import strutils
 
 from pathod import log
@@ -79,7 +79,7 @@ class SSLInfo:
             }
             t = types.get(pk.type(), "Uknown")
             parts.append("\tPubkey: %s bit %s" % (pk.bits(), t))
-            s = certs.SSLCert(i)
+            s = certs.Cert(i)
             if s.altnames:
                 parts.append("\tSANs: %s" % " ".join(strutils.always_str(n, "utf8") for n in s.altnames))
         return "\n".join(parts)
@@ -244,6 +244,7 @@ class Pathoc(tcp.TCPClient):
             port=connect_to[1],
             path=None,
             http_version='HTTP/1.1',
+            headers=[(b"Host", connect_to[0].encode("idna"))],
             content=b'',
         )
         self.wfile.write(net_http.http1.assemble_request(req))
@@ -312,7 +313,7 @@ class Pathoc(tcp.TCPClient):
                     if self.use_http2:
                         alpn_protos.append(b'h2')
 
-                    self.convert_to_ssl(
+                    self.convert_to_tls(
                         sni=self.sni,
                         cert=self.clientcert,
                         method=self.ssl_version,

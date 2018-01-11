@@ -1,3 +1,4 @@
+import csv
 import typing
 
 from mitmproxy import ctx
@@ -6,6 +7,8 @@ from mitmproxy import exceptions
 from mitmproxy import flow
 from mitmproxy import contentviews
 from mitmproxy.utils import strutils
+import mitmproxy.types
+
 
 from mitmproxy.tools.console import overlay
 from mitmproxy.tools.console import signals
@@ -32,43 +35,33 @@ console_layouts = [
 ]
 
 
-class Logger:
-    def log(self, evt):
-        signals.add_log(evt.msg, evt.level)
-        if evt.level == "alert":
-            signals.status_message.send(
-                message=str(evt.msg),
-                expire=2
-            )
-
-
 class UnsupportedLog:
     """
         A small addon to dump info on flow types we don't support yet.
     """
     def websocket_message(self, f):
         message = f.messages[-1]
-        signals.add_log(f.message_info(message), "info")
-        signals.add_log(strutils.bytes_to_escaped_str(message.content), "debug")
+        ctx.log.info(f.message_info(message))
+        ctx.log.debug(message.content if isinstance(message.content, str) else strutils.bytes_to_escaped_str(message.content))
 
     def websocket_end(self, f):
-        signals.add_log("WebSocket connection closed by {}: {} {}, {}".format(
+        ctx.log.info("WebSocket connection closed by {}: {} {}, {}".format(
             f.close_sender,
             f.close_code,
             f.close_message,
-            f.close_reason), "info")
+            f.close_reason))
 
     def tcp_message(self, f):
         message = f.messages[-1]
         direction = "->" if message.from_client else "<-"
-        signals.add_log("{client_host}:{client_port} {direction} tcp {direction} {server_host}:{server_port}".format(
+        ctx.log.info("{client_host}:{client_port} {direction} tcp {direction} {server_host}:{server_port}".format(
             client_host=f.client_conn.address[0],
             client_port=f.client_conn.address[1],
             server_host=f.server_conn.address[0],
             server_port=f.server_conn.address[1],
             direction=direction,
-        ), "info")
-        signals.add_log(strutils.bytes_to_escaped_str(message.content), "debug")
+        ))
+        ctx.log.debug(strutils.bytes_to_escaped_str(message.content))
 
 
 class ConsoleAddon:
@@ -111,8 +104,7 @@ class ConsoleAddon:
     @command.command("console.layout.options")
     def layout_options(self) -> typing.Sequence[str]:
         """
-            Returns the valid options for console layout. Use these by setting
-            the console_layout option.
+            Returns the available options for the console_layout option.
         """
         return ["single", "vertical", "horizontal"]
 
@@ -225,7 +217,11 @@ class ConsoleAddon:
 
     @command.command("console.choose")
     def console_choose(
-        self, prompt: str, choices: typing.Sequence[str], *cmd: str
+        self,
+        prompt: str,
+        choices: typing.Sequence[str],
+        cmd: mitmproxy.types.Cmd,
+        *args: mitmproxy.types.Arg
     ) -> None:
         """
             Prompt the user to choose from a specified list of strings, then
@@ -234,7 +230,7 @@ class ConsoleAddon:
         """
         def callback(opt):
             # We're now outside of the call context...
-            repl = " ".join(cmd)
+            repl = cmd + " " + " ".join(args)
             repl = repl.replace("{choice}", opt)
             try:
                 self.master.commands.call(repl)
@@ -247,7 +243,11 @@ class ConsoleAddon:
 
     @command.command("console.choose.cmd")
     def console_choose_cmd(
-        self, prompt: str, choicecmd: str, *cmd: str
+        self,
+        prompt: str,
+        choicecmd: mitmproxy.types.Cmd,
+        subcmd: mitmproxy.types.Cmd,
+        *args: mitmproxy.types.Arg
     ) -> None:
         """
             Prompt the user to choose from a list of strings returned by a
@@ -258,10 +258,10 @@ class ConsoleAddon:
 
         def callback(opt):
             # We're now outside of the call context...
-            repl = " ".join(cmd)
+            repl = " ".join(args)
             repl = repl.replace("{choice}", opt)
             try:
-                self.master.commands.call(repl)
+                self.master.commands.call(subcmd + " " + repl)
             except exceptions.CommandError as e:
                 signals.status_message.send(message=str(e))
 
@@ -272,7 +272,7 @@ class ConsoleAddon:
     @command.command("console.command")
     def console_command(self, *partial: str) -> None:
         """
-        Prompt the user to edit a command with a (possilby empty) starting value.
+        Prompt the user to edit a command with a (possibly empty) starting value.
         """
         signals.status_prompt_command.send(partial=" ".join(partial))  # type: ignore
 
@@ -322,6 +322,7 @@ class ConsoleAddon:
         signals.pop_view_state.send(self)
 
     @command.command("console.bodyview")
+    @command.argument("part", type=mitmproxy.types.Choice("console.bodyview.options"))
     def bodyview(self, f: flow.Flow, part: str) -> None:
         """
             Spawn an external viewer for a flow request or response body based
@@ -329,17 +330,27 @@ class ConsoleAddon:
             correct viewier, and fall back to the programs in $PAGER or $EDITOR
             if necessary.
         """
-        fpart = getattr(f, part)
+        fpart = getattr(f, part, None)
         if not fpart:
-            raise exceptions.CommandError("Could not view part %s." % part)
+            raise exceptions.CommandError("Part must be either request or response, not %s." % part)
         t = fpart.headers.get("content-type")
         content = fpart.get_content(strict=False)
         if not content:
             raise exceptions.CommandError("No content to view.")
         self.master.spawn_external_viewer(content, t)
 
+    @command.command("console.bodyview.options")
+    def bodyview_options(self) -> typing.Sequence[str]:
+        """
+            Possible parts for console.bodyview.
+        """
+        return ["request", "response"]
+
     @command.command("console.edit.focus.options")
     def edit_focus_options(self) -> typing.Sequence[str]:
+        """
+            Possible components for console.edit.focus.
+        """
         return [
             "cookies",
             "form",
@@ -349,16 +360,24 @@ class ConsoleAddon:
             "reason",
             "request-headers",
             "response-headers",
+            "request-body",
+            "response-body",
             "status_code",
             "set-cookies",
             "url",
         ]
 
     @command.command("console.edit.focus")
+    @command.argument("part", type=mitmproxy.types.Choice("console.edit.focus.options"))
     def edit_focus(self, part: str) -> None:
         """
-            Edit the query of the current focus.
+            Edit a component of the currently focused flow.
         """
+        flow = self.master.view.focus.flow
+        # This shouldn't be necessary once this command is "console.edit @focus",
+        # but for now it is.
+        if not flow:
+            raise exceptions.CommandError("No flow selected.")
         if part == "cookies":
             self.master.switch_view("edit_focus_cookies")
         elif part == "form":
@@ -371,6 +390,21 @@ class ConsoleAddon:
             self.master.switch_view("edit_focus_request_headers")
         elif part == "response-headers":
             self.master.switch_view("edit_focus_response_headers")
+        elif part in ("request-body", "response-body"):
+            if part == "request-body":
+                message = flow.request
+            else:
+                message = flow.response
+            if not message:
+                raise exceptions.CommandError("Flow has no {}.".format(part.split("-")[0]))
+            c = self.master.spawn_editor(message.get_content(strict=False) or b"")
+            # Fix an issue caused by some editors when editing a
+            # request/response body. Many editors make it hard to save a
+            # file without a terminating newline on the last line. When
+            # editing message bodies, this can cause problems. For now, I
+            # just strip the newlines off the end of the body when we return
+            # from an editor.
+            message.content = c.rstrip(b"\n")
         elif part == "set-cookies":
             self.master.switch_view("edit_focus_setcookies")
         elif part in ["url", "method", "status_code", "reason"]:
@@ -405,20 +439,34 @@ class ConsoleAddon:
         """
         self._grideditor().cmd_delete()
 
-    @command.command("console.grideditor.readfile")
-    def grideditor_readfile(self, path: str) -> None:
+    @command.command("console.grideditor.load")
+    def grideditor_load(self, path: mitmproxy.types.Path) -> None:
         """
             Read a file into the currrent cell.
         """
         self._grideditor().cmd_read_file(path)
 
-    @command.command("console.grideditor.readfile_escaped")
-    def grideditor_readfile_escaped(self, path: str) -> None:
+    @command.command("console.grideditor.load_escaped")
+    def grideditor_load_escaped(self, path: mitmproxy.types.Path) -> None:
         """
-            Read a file containing a Python-style escaped stringinto the
+            Read a file containing a Python-style escaped string into the
             currrent cell.
         """
         self._grideditor().cmd_read_file_escaped(path)
+
+    @command.command("console.grideditor.save")
+    def grideditor_save(self, path: mitmproxy.types.Path) -> None:
+        """
+            Save data to file as a CSV.
+        """
+        rows = self._grideditor().value
+        with open(path, "w", newline='', encoding="utf8") as fp:
+            writer = csv.writer(fp)
+            for row in rows:
+                writer.writerow(
+                    [strutils.always_str(x) or "" for x in row]  # type: ignore
+                )
+        ctx.log.alert("Saved %s rows as CSV." % (len(rows)))
 
     @command.command("console.grideditor.editor")
     def grideditor_editor(self) -> None:
@@ -428,26 +476,33 @@ class ConsoleAddon:
         self._grideditor().cmd_spawn_editor()
 
     @command.command("console.flowview.mode.set")
-    def flowview_mode_set(self) -> None:
+    @command.argument("mode", type=mitmproxy.types.Choice("console.flowview.mode.options"))
+    def flowview_mode_set(self, mode: str) -> None:
         """
             Set the display mode for the current flow view.
         """
-        fv = self.master.window.current("flowview")
+        fv = self.master.window.current_window("flowview")
         if not fv:
             raise exceptions.CommandError("Not viewing a flow.")
         idx = fv.body.tab_offset
 
-        def callback(opt):
-            try:
-                self.master.commands.call_args(
-                    "view.setval",
-                    ["@focus", "flowview_mode_%s" % idx, opt]
-                )
-            except exceptions.CommandError as e:
-                signals.status_message.send(message=str(e))
+        if mode not in [i.name.lower() for i in contentviews.views]:
+            raise exceptions.CommandError("Invalid flowview mode.")
 
-        opts = [i.name.lower() for i in contentviews.views]
-        self.master.overlay(overlay.Chooser(self.master, "Mode", opts, "", callback))
+        try:
+            self.master.commands.call_args(
+                "view.setval",
+                ["@focus", "flowview_mode_%s" % idx, mode]
+            )
+        except exceptions.CommandError as e:
+            signals.status_message.send(message=str(e))
+
+    @command.command("console.flowview.mode.options")
+    def flowview_mode_options(self) -> typing.Sequence[str]:
+        """
+            Returns the valid options for the flowview mode.
+        """
+        return [i.name.lower() for i in contentviews.views]
 
     @command.command("console.flowview.mode")
     def flowview_mode(self) -> str:
@@ -467,13 +522,6 @@ class ConsoleAddon:
             ]
         )
 
-    @command.command("console.eventlog.clear")
-    def eventlog_clear(self) -> None:
-        """
-            Clear the event log.
-        """
-        signals.sig_clear_log.send(self)
-
     @command.command("console.key.contexts")
     def key_contexts(self) -> typing.Sequence[str]:
         """
@@ -482,14 +530,20 @@ class ConsoleAddon:
         return list(sorted(keymap.Contexts))
 
     @command.command("console.key.bind")
-    def key_bind(self, contexts: typing.Sequence[str], key: str, *command: str) -> None:
+    def key_bind(
+        self,
+        contexts: typing.Sequence[str],
+        key: str,
+        cmd: mitmproxy.types.Cmd,
+        *args: mitmproxy.types.Arg
+    ) -> None:
         """
             Bind a shortcut key.
         """
         try:
             self.master.keymap.add(
                 key,
-                " ".join(command),
+                cmd + " " + " ".join(args),
                 contexts,
                 ""
             )
@@ -510,7 +564,7 @@ class ConsoleAddon:
         kwidget = self.master.window.current("keybindings")
         if not kwidget:
             raise exceptions.CommandError("Not viewing key bindings.")
-        f = kwidget.focus()
+        f = kwidget.get_focused_binding()
         if not f:
             raise exceptions.CommandError("No key binding focused")
         return f

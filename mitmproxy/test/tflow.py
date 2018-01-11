@@ -44,7 +44,7 @@ def twebsocketflow(client_conn=True, server_conn=True, messages=True, err=None, 
             "GET",
             "http",
             "example.com",
-            "80",
+            80,
             "/ws",
             "HTTP/1.1",
             headers=net_http.Headers(
@@ -53,6 +53,8 @@ def twebsocketflow(client_conn=True, server_conn=True, messages=True, err=None, 
                 sec_websocket_version="13",
                 sec_websocket_key="1234",
             ),
+            timestamp_start=946681200,
+            timestamp_end=946681201,
             content=b''
         )
         resp = http.HTTPResponse(
@@ -64,6 +66,8 @@ def twebsocketflow(client_conn=True, server_conn=True, messages=True, err=None, 
                 upgrade='websocket',
                 sec_websocket_accept=b'',
             ),
+            timestamp_start=946681202,
+            timestamp_end=946681203,
             content=b'',
         )
         handshake_flow = http.HTTPFlow(client_conn, server_conn)
@@ -71,7 +75,9 @@ def twebsocketflow(client_conn=True, server_conn=True, messages=True, err=None, 
         handshake_flow.response = resp
 
     f = websocket.WebSocketFlow(client_conn, server_conn, handshake_flow)
-    handshake_flow.metadata['websocket_flow'] = f
+    f.metadata['websocket_handshake'] = handshake_flow.id
+    handshake_flow.metadata['websocket_flow'] = f.id
+    handshake_flow.metadata['websocket'] = True
 
     if messages is True:
         messages = [
@@ -151,10 +157,10 @@ def tclient_conn():
         address=("127.0.0.1", 22),
         clientcert=None,
         mitmcert=None,
-        ssl_established=False,
-        timestamp_start=1,
-        timestamp_ssl_setup=2,
-        timestamp_end=3,
+        tls_established=False,
+        timestamp_start=946681200,
+        timestamp_tls_setup=946681201,
+        timestamp_end=946681206,
         sni="address",
         cipher_name="cipher",
         alpn_proto_negotiated=b"http/1.1",
@@ -176,11 +182,11 @@ def tserver_conn():
         source_address=("address", 22),
         ip_address=("192.168.0.1", 22),
         cert=None,
-        timestamp_start=1,
-        timestamp_tcp_setup=2,
-        timestamp_ssl_setup=3,
-        timestamp_end=4,
-        ssl_established=False,
+        timestamp_start=946681202,
+        timestamp_tcp_setup=946681203,
+        timestamp_tls_setup=946681204,
+        timestamp_end=946681205,
+        tls_established=False,
         sni="address",
         alpn_proto_negotiated=None,
         tls_version="TLSv1.2",

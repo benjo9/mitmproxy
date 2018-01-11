@@ -1,17 +1,10 @@
 import typing
-import urwid
 
 from mitmproxy import exceptions
 from mitmproxy import flow
+
+from mitmproxy.tools.console import overlay
 from mitmproxy.tools.console import signals
-
-
-class CommandEdit(urwid.Edit):
-    def __init__(self, partial):
-        urwid.Edit.__init__(self, ":", partial)
-
-    def keypress(self, size, key):
-        return urwid.Edit.keypress(self, size, key)
 
 
 class CommandExecutor:
@@ -30,9 +23,15 @@ class CommandExecutor:
                         signals.status_message.send(
                             message="Command returned %s flows" % len(ret)
                         )
-                    elif len(str(ret)) < 50:
-                        signals.status_message.send(message=str(ret))
-                    else:
+                    elif type(ret) == flow.Flow:
                         signals.status_message.send(
-                            message="Command returned too much data to display."
+                            message="Command returned 1 flow"
+                        )
+                    else:
+                        self.master.overlay(
+                            overlay.DataViewerOverlay(
+                                self.master,
+                                ret,
+                            ),
+                            valign="top"
                         )

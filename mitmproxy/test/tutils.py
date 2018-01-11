@@ -1,4 +1,3 @@
-import time
 from io import BytesIO
 
 from mitmproxy.utils import data
@@ -31,7 +30,9 @@ def treq(**kwargs):
         path=b"/path",
         http_version=b"HTTP/1.1",
         headers=http.Headers(((b"header", b"qvalue"), (b"content-length", b"7"))),
-        content=b"content"
+        content=b"content",
+        timestamp_start=946681200,
+        timestamp_end=946681201,
     )
     default.update(kwargs)
     return http.Request(**default)
@@ -48,8 +49,8 @@ def tresp(**kwargs):
         reason=b"OK",
         headers=http.Headers(((b"header-response", b"svalue"), (b"content-length", b"7"))),
         content=b"message",
-        timestamp_start=time.time(),
-        timestamp_end=time.time(),
+        timestamp_start=946681202,
+        timestamp_end=946681203,
     )
     default.update(kwargs)
     return http.Response(**default)

@@ -2,6 +2,7 @@
 def map(km):
     km.add(":", "console.command ", ["global"], "Command prompt")
     km.add("?", "console.view.help", ["global"], "View help")
+    km.add("B", "browser.start", ["global"], "Start an attached browser")
     km.add("C", "console.view.commands", ["global"], "View commands")
     km.add("K", "console.view.keybindings", ["global"], "View key bindings")
     km.add("O", "console.view.options", ["global"], "View options")
@@ -30,7 +31,7 @@ def map(km):
     km.add("A", "flow.resume @all", ["flowlist", "flowview"], "Resume all intercepted flows")
     km.add("a", "flow.resume @focus", ["flowlist", "flowview"], "Resume this intercepted flow")
     km.add(
-        "b", "console.command cut.save s.content|@focus ''",
+        "b", "console.command cut.save @focus response.content ",
         ["flowlist", "flowview"],
         "Save response body to file"
     )
@@ -40,7 +41,7 @@ def map(km):
         "e",
         """
         console.choose.cmd Format export.formats
-        console.command export.file {choice} @focus ''
+        console.command export.file {choice} @focus
         """,
         ["flowlist", "flowview"],
         "Export this flow to file"
@@ -58,7 +59,7 @@ def map(km):
     km.add("M", "view.marked.toggle", ["flowlist"], "Toggle viewing marked flows")
     km.add(
         "n",
-        "console.command view.create get https://google.com",
+        "console.command view.create get https://example.com/",
         ["flowlist"],
         "Create a new flow"
     )
@@ -66,14 +67,14 @@ def map(km):
         "o",
         """
         console.choose.cmd Order view.order.options
-        set console_order={choice}
+        set view_order={choice}
         """,
         ["flowlist"],
         "Set flow list order"
     )
     km.add("r", "replay.client @focus", ["flowlist", "flowview"], "Replay this flow")
     km.add("S", "console.command replay.server ", ["flowlist"], "Start server replay")
-    km.add("v", "set console_order_reversed=toggle", ["flowlist"], "Reverse flow list order")
+    km.add("v", "set view_order_reversed=toggle", ["flowlist"], "Reverse flow list order")
     km.add("U", "flow.mark @all false", ["flowlist"], "Un-set all marks")
     km.add("w", "console.command save.file @shown ", ["flowlist"], "Save listed flows to file")
     km.add("V", "flow.revert @focus", ["flowlist", "flowview"], "Revert changes to this flow")
@@ -115,7 +116,15 @@ def map(km):
         "View flow body in an external viewer"
     )
     km.add("p", "view.focus.prev", ["flowview"], "Go to previous flow")
-    km.add("m", "console.flowview.mode.set", ["flowview"], "Set flow view mode")
+    km.add(
+        "m",
+        """
+        console.choose.cmd Mode console.flowview.mode.options
+        console.flowview.mode.set {choice}
+        """,
+        ["flowview"],
+        "Set flow view mode"
+    )
     km.add(
         "z",
         """
@@ -136,19 +145,25 @@ def map(km):
     km.add("d", "console.grideditor.delete", ["grideditor"], "Delete this row")
     km.add(
         "r",
-        "console.command console.grideditor.readfile",
+        "console.command console.grideditor.load",
         ["grideditor"],
-        "Read unescaped data from file"
+        "Read unescaped data into the current cell from file"
     )
     km.add(
         "R",
-        "console.command console.grideditor.readfile_escaped",
+        "console.command console.grideditor.load_escaped",
         ["grideditor"],
-        "Read a Python-style escaped string from file"
+        "Load a Python-style escaped string into the current cell from file"
     )
     km.add("e", "console.grideditor.editor", ["grideditor"], "Edit in external editor")
+    km.add(
+        "w",
+        "console.command console.grideditor.save ",
+        ["grideditor"],
+        "Save data to file as CSV"
+    )
 
-    km.add("z", "console.eventlog.clear", ["eventlog"], "Clear")
+    km.add("z", "eventstore.clear", ["eventlog"], "Clear")
 
     km.add(
         "a",

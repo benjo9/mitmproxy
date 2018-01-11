@@ -1,12 +1,11 @@
 import time
+import typing  # noqa
 import uuid
 
-from mitmproxy import controller  # noqa
-from mitmproxy import stateobject
 from mitmproxy import connections
+from mitmproxy import controller, exceptions  # noqa
+from mitmproxy import stateobject
 from mitmproxy import version
-
-import typing  # noqa
 
 
 class Error(stateobject.StateObject):
@@ -99,6 +98,7 @@ class Flow(stateobject.StateObject):
         return d
 
     def set_state(self, state):
+        state = state.copy()
         state.pop("version")
         if "backup" in state:
             self._backup = state.pop("backup")
@@ -144,7 +144,11 @@ class Flow(stateobject.StateObject):
 
     @property
     def killable(self):
-        return self.reply and self.reply.state == "taken"
+        return (
+            self.reply and
+            self.reply.state in {"start", "taken"} and
+            self.reply.value != exceptions.Kill
+        )
 
     def kill(self):
         """
@@ -152,13 +156,7 @@ class Flow(stateobject.StateObject):
         """
         self.error = Error("Connection killed")
         self.intercepted = False
-
-        # reply.state should be "taken" here, or .take() will raise an
-        # exception.
-        if self.reply.state != "taken":
-            self.reply.take()
         self.reply.kill(force=True)
-        self.reply.commit()
         self.live = False
 
     def intercept(self):
@@ -178,5 +176,7 @@ class Flow(stateobject.StateObject):
         if not self.intercepted:
             return
         self.intercepted = False
-        self.reply.ack()
-        self.reply.commit()
+        # If a flow is intercepted and then duplicated, the duplicated one is not taken.
+        if self.reply.state == "taken":
+            self.reply.ack()
+            self.reply.commit()

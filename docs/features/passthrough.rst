@@ -13,7 +13,7 @@ mechanism:
   away. Note that mitmproxy's "Limit" option is often the better alternative here, as it is
   not affected by the limitations listed below.
 
-If you want to peek into (SSL-protected) non-HTTP connections, check out the :ref:`tcpproxy`
+If you want to peek into (SSL-protected) non-HTTP connections, check out the :ref:`tcp_proxy`
 feature.
 If you want to ignore traffic from mitmproxy's processing because of large response bodies,
 take a look at the :ref:`streaming` feature.
@@ -38,7 +38,7 @@ There are two important quirks to consider:
 - **In transparent mode, the ignore pattern is matched against the IP and ClientHello SNI host.** While we usually infer the
   hostname from the Host header if the ``--host`` argument is passed to mitmproxy, we do not
   have access to this information before the SSL handshake. If the client uses SNI however, then we treat the SNI host as an ignore target.
-- **In regular mode, explicit HTTP requests are never ignored.** [#explicithttp]_ The ignore pattern is
+- **In regular and upstream proxy mode, explicit HTTP requests are never ignored.** [#explicithttp]_ The ignore pattern is
   applied on CONNECT requests, which initiate HTTPS or clear-text WebSocket connections.
 
 Tutorial
@@ -88,7 +88,7 @@ Here are some other examples for ignore patterns:
 
 .. seealso::
 
-    - :ref:`tcpproxy`
+    - :ref:`tcp_proxy`
     - :ref:`streaming`
     - mitmproxy's "Limit" feature
 

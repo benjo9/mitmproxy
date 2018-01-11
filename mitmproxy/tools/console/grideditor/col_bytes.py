@@ -46,7 +46,7 @@ class Edit(base.Cell):
         except ValueError:
             signals.status_message.send(
                 self,
-                message="Invalid Python-style string encoding.",
+                message="Invalid data.",
                 expire=1000
             )
             raise
